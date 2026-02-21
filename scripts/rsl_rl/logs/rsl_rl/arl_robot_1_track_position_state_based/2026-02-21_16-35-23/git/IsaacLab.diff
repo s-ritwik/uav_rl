@@ -1,0 +1,39 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   source/isaaclab/isaaclab/envs/mdp/commands/velocity_command.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.vscode/browse.vc.db
+	.vscode/browse.vc.db-shm
+	.vscode/browse.vc.db-wal
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/source/isaaclab/isaaclab/envs/mdp/commands/velocity_command.py b/source/isaaclab/isaaclab/envs/mdp/commands/velocity_command.py
+index b053a911..a1c5c1e5 100644
+--- a/source/isaaclab/isaaclab/envs/mdp/commands/velocity_command.py
++++ b/source/isaaclab/isaaclab/envs/mdp/commands/velocity_command.py
+@@ -356,11 +356,13 @@ class UniformVelocityCommand(CommandTerm):
+             return
+         # get marker location
+         # -- base state
+-        base_pos_w = self.robot.data.root_pos_w.clone()
++        # base_pos_w = self.robot.data.root_pos_w.clone()
++        base_pos_w = self.robot.data.body_pos_w[:,3,:].clone()
+         base_pos_w[:, 2] += 0.5
+         # -- resolve the scales and quaternions
+         vel_des_arrow_scale, vel_des_arrow_quat = self._resolve_xy_velocity_to_arrow(self.command[:, :2])
+-        vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(self.robot.data.root_lin_vel_b[:, :2])
++        # vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(self.robot.data.root_lin_vel_b[:, :2])
++        vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(self.robot.data.body_link_lin_vel_w[:, 3, :2])
+         # display markers
+         self.goal_vel_visualizer.visualize(base_pos_w, vel_des_arrow_quat, vel_des_arrow_scale)
+         self.current_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
