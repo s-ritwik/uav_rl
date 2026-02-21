@@ -34,6 +34,18 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--debug_actions",
+    action="store_true",
+    default=False,
+    help="Print policy actions and velocity setpoints during play.",
+)
+parser.add_argument(
+    "--debug_action_interval",
+    type=int,
+    default=50,
+    help="Number of simulation steps between debug action prints.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -177,6 +189,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset environment
     obs = env.get_observations()
     timestep = 0
+    debug_term_missing_warned = False
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -188,8 +201,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs, _, dones, _ = env.step(actions)
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
+
+        timestep += 1
+        if args_cli.debug_actions and timestep % max(1, args_cli.debug_action_interval) == 0:
+            try:
+                control_term = env.unwrapped.action_manager.get_term("control")
+                raw = control_term.raw_actions[0].detach().cpu().tolist()
+                setpoint = control_term.processed_actions[0].detach().cpu().tolist()
+                print(
+                    f"[DEBUG_ACTIONS step={timestep}] "
+                    f"raw={raw} vel_sp={setpoint[:3]} yaw_rate_sp={setpoint[3]:.4f}"
+                )
+                if hasattr(control_term, "last_motor_omega"):
+                    motor_omega = control_term.last_motor_omega[0].detach().cpu().tolist()
+                    print(f"[DEBUG_ACTIONS step={timestep}] motor_omega={motor_omega}")
+            except Exception as exc:
+                if not debug_term_missing_warned:
+                    print(f"[WARN] --debug_actions enabled but could not read action term 'control': {exc}")
+                    debug_term_missing_warned = True
+
         if args_cli.video:
-            timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
