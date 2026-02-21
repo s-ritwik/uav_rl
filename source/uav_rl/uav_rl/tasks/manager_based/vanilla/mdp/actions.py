@@ -24,7 +24,7 @@ class PX4LikeVelocityActionCfg(ActionTermCfg):
 
     action_scale: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
     action_offset: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    velocity_limits: tuple[float, float, float] = (5.0, 5.0, 3.0)
+    velocity_limits: tuple[float, float, float] = (3.0, 3.0, 2.0)
     yaw_rate_limit: float = 2.5
 
     # Controller parameters (Pegasus example 12 defaults).

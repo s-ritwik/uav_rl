@@ -41,7 +41,7 @@ class ActionsCfg:
     control = mdp.PX4LikeVelocityActionCfg(
         class_type=mdp.PX4LikeVelocityAction,
         asset_name="robot",
-        action_scale=(3.0, 3.0, 2.0, 1.5),
+        action_scale=(1.0, 1.0, 1.0, 1.0),
         action_offset=(0.0, 0.0, 0.0, 0.0),
         velocity_limits=(6.0, 6.0, 4.0),
         yaw_rate_limit=3.0,
@@ -100,19 +100,19 @@ class EventCfg:
 
 @configclass
 class RewardsCfg:
-    """Reward terms for hover-style stabilization baseline."""
+    """Reward terms for hover-in-place without a fixed world-frame position target."""
 
     alive = RewTerm(func=mdp.is_alive, weight=0.2)
-    terminated = RewTerm(func=mdp.is_terminated, weight=-5.0)
+    terminated = RewTerm(func=mdp.is_terminated, weight=-10.0)
 
-    position_error = RewTerm(func=mdp.position_error_l2, weight=-2.0, params={"target_pos": (0.0, 0.0, 1.0)})
-    upright = RewTerm(func=mdp.flat_orientation_l2, weight=-0.5, params={"asset_cfg": SceneEntityCfg("robot")})
+    # Hover shaping: reduce drift and rotation at whatever position the vehicle is currently at.
+    horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.20)
+    vertical_speed = RewTerm(func=mdp.vertical_speed_l2, weight=-0.06)
+    angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.05)
+    upright = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")})
 
-    linear_speed = RewTerm(func=mdp.speed_l2, weight=-0.05)
-    angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.02)
-
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
-    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.002)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
+    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.003)
 
 
 @configclass
