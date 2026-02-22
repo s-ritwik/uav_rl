@@ -7,7 +7,7 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
 _THIS_DIR = Path(__file__).resolve().parent
-IRIS_USD_PATH = str((_THIS_DIR / "iris" / "iris.usd").resolve())
+IRIS_USD_PATH = str((_THIS_DIR / "iris" / "iris_capsule.usd").resolve())
 
 IRIS_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",

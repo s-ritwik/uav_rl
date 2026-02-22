@@ -6,9 +6,15 @@ from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
 
 
-def root_pos_rel(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def root_pos_rel(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
+) -> torch.Tensor:
+    """Robot root position expressed in the platform frame (translation only)."""
     asset: RigidObject = env.scene[asset_cfg.name]
-    return asset.data.root_pos_w - env.scene.env_origins
+    reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
+    return asset.data.root_pos_w - reference_asset.data.root_pos_w
 
 
 def command_velocity(env, action_name: str = "control") -> torch.Tensor:
