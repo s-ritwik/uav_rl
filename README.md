@@ -69,13 +69,13 @@ python scripts/zero_agent.py --task vanilla --headless
 python scripts/random_agent.py --task vanilla --headless
 ```
 
-## Task Registry
+## RL Tasks
 
-| Task ID | Status | Description |
-|---|---|---|
-| `vanilla` | Active | Main UAV task using Iris + PX4-like velocity controller. |
-| `Uav-Vanilla-v0` | Active alias | Versioned alias of `vanilla`. |
-| `Template-Uav-Rl-v0` | Legacy/template | Cartpole template task kept for reference. |
+RL Task list:
+
+| Task          |   Robot    |   Hardware Tested?   | Description                                                      |
+|---------------|:----------:|:--------------------:|------------------------------------------------------------------|
+| `vanilla` |     IRIS     |  ❌  | Basic UAV Hover policy, to understand the env cfg |
 
 ## Task Channel Breakdown (`vanilla`)
 
