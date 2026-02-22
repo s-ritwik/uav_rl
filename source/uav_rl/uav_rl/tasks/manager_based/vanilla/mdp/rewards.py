@@ -91,3 +91,20 @@ def vertical_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Scen
 def angular_rate_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: RigidObject = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.root_ang_vel_b), dim=1)
+
+
+def yaw_error_l2(
+    env: "ManagerBasedRLEnv",
+    target_yaw: float = 0.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Squared wrapped yaw error in world frame."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    quat_wxyz = asset.data.root_quat_w
+    w = quat_wxyz[:, 0]
+    x = quat_wxyz[:, 1]
+    y = quat_wxyz[:, 2]
+    z = quat_wxyz[:, 3]
+    yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    yaw_error = torch.atan2(torch.sin(yaw - target_yaw), torch.cos(yaw - target_yaw))
+    return torch.square(yaw_error)

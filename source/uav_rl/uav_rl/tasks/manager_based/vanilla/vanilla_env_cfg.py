@@ -180,6 +180,11 @@ class RewardsCfg:
     horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.08)
     vertical_speed = RewTerm(func=mdp.vertical_speed_l2, weight=-0.08)
     angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.05)
+    yaw_error = RewTerm(
+        func=mdp.yaw_error_l2,
+        weight=-0.25,
+        params={"target_yaw": 0.0, "asset_cfg": SceneEntityCfg("robot")},
+    )
     upright = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")})
 
     # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
