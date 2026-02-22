@@ -36,6 +36,7 @@ docker/.container.cfg
 .vscode/browse.vc.db*
 
 # Outputs
+/logs/
 **/output/*
 **/outputs/*
 **/videos/*

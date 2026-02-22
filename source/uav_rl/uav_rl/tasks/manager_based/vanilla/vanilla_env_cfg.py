@@ -111,8 +111,8 @@ class RewardsCfg:
     angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.05)
     upright = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")})
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
-    action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.003)
+    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
+    # action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.003)
 
 
 @configclass
@@ -138,7 +138,7 @@ class VanillaEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
 
     def __post_init__(self):
-        self.decimation = 1
+        self.decimation = 10
         self.episode_length_s = 10.0
 
         self.viewer.eye = (8.0, 8.0, 6.0)

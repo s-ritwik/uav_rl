@@ -1,135 +1,132 @@
-# UAV RL Developlment
+# UAV RL
+
+This repo is where I am building a training stack for UAVs for different purposes, starting with stable manager-based RL tasks in Isaac Lab and expanding from there.
 
 ## Overview
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+`uav_rl` is centered on one thing right now: getting strong task definitions and a repeatable train/eval loop for quadrotor control.
 
-**Key Features:**
+Current focus:
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
+- Manager-based UAV tasks in Isaac Lab.
+- PX4-like velocity-control action pipeline on an Iris quadrotor asset.
+- Fast iteration with RSL-RL training and checkpoint playback.
 
-**Keywords:** extension, template, isaaclab
+Transfer workflows are not the priority yet, so this README keeps that part intentionally brief.
 
 ## Installation
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
+1. Install Git LFS (required for USD and model artifacts):
 
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
+```bash
+git lfs install
+```
 
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
+2. Install Isaac Lab by following the official guide:
+   https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html
 
-    ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-    python -m pip install -e source/uav_rl
+3. Clone this repo outside your Isaac Lab directory.
 
-- Verify that the extension is correctly installed by:
+4. Install this package in editable mode:
 
-    - Listing the available tasks:
+```bash
+# use 'PATH_TO_isaaclab.sh|bat -p' if Isaac Lab is not in your active python env
+python -m pip install -e source/uav_rl
+```
 
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
+5. Quick sanity check:
 
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
+```bash
+python scripts/list_envs.py
+```
 
-    - Running a task:
+## Running Tasks
 
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
-        ```
+Primary workflow (RSL-RL):
 
-    - Running a task with dummy agents:
+```bash
+python scripts/rsl_rl/train.py --task vanilla --headless
+```
 
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
+Play latest checkpoint:
 
-        - Zero-action agent
+```bash
+python scripts/rsl_rl/play.py --task vanilla --headless
+```
 
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/zero_agent.py --task=<TASK_NAME>
-            ```
-        - Random-action agent
+Useful options:
 
-            ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/random_agent.py --task=<TASK_NAME>
-            ```
+- `--num_envs <N>`: override default number of parallel envs.
+- `--run_name <name>`: suffix run folder name.
+- `--load_run <run_dir>`: pick a specific run directory during play/resume.
+- `--checkpoint <path/to/model.pt>`: load a specific checkpoint file.
+- `--debug_actions`: print policy action channels (`vx, vy, vz, yaw_rate`) during play.
 
-### Set up IDE (Optional)
+Zero/random-agent smoke tests:
 
-To setup the IDE, please follow these instructions:
+```bash
+python scripts/zero_agent.py --task vanilla --headless
+python scripts/random_agent.py --task vanilla --headless
+```
 
-- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
-  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
+## Task Registry
 
-If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
-The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
-This helps in indexing all the python modules for intelligent suggestions while writing code.
+| Task ID | Status | Description |
+|---|---|---|
+| `vanilla` | Active | Main UAV task using Iris + PX4-like velocity controller. |
+| `Uav-Vanilla-v0` | Active alias | Versioned alias of `vanilla`. |
+| `Template-Uav-Rl-v0` | Legacy/template | Cartpole template task kept for reference. |
 
-### Setup as Omniverse Extension (Optional)
+## Task Channel Breakdown (`vanilla`)
 
-We provide an example UI extension that will load upon enabling your extension defined in `source/uav_rl/uav_rl/ui_extension_example.py`.
+The `vanilla` environment is currently the center of development.
 
-To enable your extension, follow these steps:
+Action channel (policy output):
 
-1. **Add the search path of this project/repository** to the extension manager:
-    - Navigate to the extension manager using `Window` -> `Extensions`.
-    - Click on the **Hamburger Icon**, then go to `Settings`.
-    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
-    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
-    - Click on the **Hamburger Icon**, then click `Refresh`.
+- 4D command: `[vx, vy, vz, yaw_rate]`.
+- Commands are scaled, then clipped to velocity/yaw limits before control allocation.
 
-2. **Search and enable your extension**:
-    - Find your extension under the `Third Party` category.
-    - Toggle it to enable your extension.
+Observation channel (policy input):
 
-## Code formatting
+- Relative position, quaternion, linear velocity, angular velocity.
+- Projected gravity, last action.
+- Command channels (`command_velocity`, `command_yaw_rate`) for conditioning.
 
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
+Reward channel:
+
+- `alive` reward.
+- Termination penalty.
+- Penalties on horizontal speed, vertical speed, and angular rate.
+- Upright-orientation penalty (`flat_orientation_l2`).
+
+Termination channel:
+
+- Timeout.
+- Minimum/maximum height violations.
+- XY out-of-bounds check.
+
+Environment defaults:
+
+- `num_envs=1024`
+- `dt=1/250`
+- `decimation=10`
+- `episode_length_s=10.0`
+
+## Logs
+
+RSL-RL runs are saved under:
+
+```text
+logs/rsl_rl/vanilla/<timestamp>_<optional_run_name>/
+```
+
+## Transfer (Current Status)
+
+Transfer is intentionally light in this repo right now. The current stage is task and policy training maturity first; transfer docs and tooling will follow once the task channel is stable.
+
+## Code Formatting
 
 ```bash
 pip install pre-commit
-```
-
-Then you can run pre-commit with:
-
-```bash
 pre-commit run --all-files
-```
-
-## Troubleshooting
-
-### Pylance Missing Indexing of Extensions
-
-In some VsCode versions, the indexing of part of the extensions is missing.
-In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "<path-to-ext-repo>/source/uav_rl"
-    ]
-}
-```
-
-### Pylance Crash
-
-If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
-A possible solution is to exclude some of omniverse packages that are not used in your project.
-To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
-Some examples of packages that can likely be excluded are:
-
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
-"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
-"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
-"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
-...
 ```

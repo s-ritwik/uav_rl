@@ -21,6 +21,11 @@ class PX4LikeVelocityActionCfg(ActionTermCfg):
 
     body_name: str = "body"
     rotor_names: tuple[str, str, str, str] = ("rotor0", "rotor1", "rotor2", "rotor3")
+    rotor_joint_names: tuple[str, str, str, str] = ("joint0", "joint1", "joint2", "joint3")
+    propeller_visual_enabled: bool = True
+    propeller_visual_idle_force_threshold: float = 0.1
+    propeller_visual_idle_speed: float = 5.0
+    propeller_visual_active_speed: float = 100.0
 
     action_scale: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
     action_offset: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
@@ -92,6 +97,10 @@ class PX4LikeVelocityAction(ActionTerm):
         self._rotor_ids = rotor_ids
         self._rotor_names = rotor_names
         self._wrench_body_ids = self._rotor_ids + [self._body_id]
+        self._propeller_visual_enabled = bool(self.cfg.propeller_visual_enabled)
+        self._propeller_visual_warned = False
+        self._rotor_joint_ids: list[int] = []
+        self._rotor_joint_names: list[str] = []
 
         self._raw_actions = torch.zeros((self.num_envs, self.action_dim), device=self.device)
         self._processed_actions = torch.zeros_like(self._raw_actions)
@@ -101,6 +110,8 @@ class PX4LikeVelocityAction(ActionTerm):
         self._action_scale = torch.tensor(self.cfg.action_scale, device=self.device).unsqueeze(0)
         self._action_offset = torch.tensor(self.cfg.action_offset, device=self.device).unsqueeze(0)
         self._velocity_limits = torch.tensor(self.cfg.velocity_limits, device=self.device)
+        self._rotor_direction = torch.tensor(self.cfg.rot_dir, device=self.device, dtype=self._raw_actions.dtype).unsqueeze(0)
+        self._rotor_visual_joint_vel = torch.zeros((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
 
         self._controller = PX4LikeVelocityController(
             num_envs=self.num_envs,
@@ -186,6 +197,46 @@ class PX4LikeVelocityAction(ActionTerm):
         self._velocity_sp[:] = processed[:, :3]
         self._yaw_rate_sp[:] = processed[:, 3]
 
+    def _maybe_initialize_propeller_visual(self):
+        if not self._propeller_visual_enabled or len(self._rotor_joint_ids) == 4:
+            return
+
+        try:
+            joint_ids, joint_names = self._asset.find_joints(list(self.cfg.rotor_joint_names), preserve_order=True)
+            if len(joint_ids) != 4:
+                raise ValueError(f"Expected 4 rotor joints, got {joint_names}")
+            self._rotor_joint_ids = joint_ids
+            self._rotor_joint_names = joint_names
+        except Exception as exc:
+            if not self._propeller_visual_warned:
+                print(
+                    "[WARN][PX4LikeVelocityAction] Could not enable propeller visual spin "
+                    f"for joints {self.cfg.rotor_joint_names}: {exc}"
+                )
+                self._propeller_visual_warned = True
+            self._propeller_visual_enabled = False
+
+    def _handle_propeller_visual(self, rotor_forces: torch.Tensor):
+        """Mirror Pegasus Multirotor.handle_propeller_visual for rotor joint animation."""
+        if not self._propeller_visual_enabled:
+            return
+
+        self._maybe_initialize_propeller_visual()
+        if not self._propeller_visual_enabled:
+            return
+
+        armed_mask = rotor_forces > 0.0
+        active_mask = rotor_forces >= float(self.cfg.propeller_visual_idle_force_threshold)
+        idle_mask = armed_mask & (~active_mask)
+
+        self._rotor_visual_joint_vel.zero_()
+        self._rotor_visual_joint_vel[idle_mask] = float(self.cfg.propeller_visual_idle_speed)
+        self._rotor_visual_joint_vel[active_mask] = float(self.cfg.propeller_visual_active_speed)
+        self._rotor_visual_joint_vel *= self._rotor_direction
+
+        # Directly write dof velocities so visuals follow the currently applied thrust command.
+        self._asset.write_joint_velocity_to_sim(self._rotor_visual_joint_vel, joint_ids=self._rotor_joint_ids)
+
     def _fallback_rotor_positions(self) -> torch.Tensor:
         l = float(self.cfg.fallback_arm_length)
         return torch.tensor(
@@ -243,6 +294,8 @@ class PX4LikeVelocityAction(ActionTerm):
             torques=self._torques,
         )
 
+        self._handle_propeller_visual(rotor_forces)
+
     def _compute_next_command(self):
         self._maybe_initialize_allocator()
 
@@ -284,6 +337,9 @@ class PX4LikeVelocityAction(ActionTerm):
             self._last_torque_sp.zero_()
             self._last_thrust_sp.zero_()
             self._controller.reset(None)
+            if self._propeller_visual_enabled and len(self._rotor_joint_ids) == 4:
+                self._rotor_visual_joint_vel.zero_()
+                self._asset.write_joint_velocity_to_sim(self._rotor_visual_joint_vel, joint_ids=self._rotor_joint_ids)
             return
 
         if isinstance(env_ids, torch.Tensor):
@@ -300,6 +356,13 @@ class PX4LikeVelocityAction(ActionTerm):
         self._last_torque_sp[ids] = 0.0
         self._last_thrust_sp[ids] = 0.0
         self._controller.reset(ids)
+        if self._propeller_visual_enabled and len(self._rotor_joint_ids) == 4:
+            self._rotor_visual_joint_vel[ids] = 0.0
+            self._asset.write_joint_velocity_to_sim(
+                self._rotor_visual_joint_vel[ids],
+                joint_ids=self._rotor_joint_ids,
+                env_ids=ids,
+            )
 
 
 PX4LikeVelocityActionCfg.class_type = PX4LikeVelocityAction
