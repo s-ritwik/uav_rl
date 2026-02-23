@@ -115,6 +115,22 @@ class EventCfg:
         },
     )
 
+    move_platform = EventTerm(
+        func=mdp.move_platform_sinusoidal,
+        mode="interval",
+        interval_range_s=(0.0, 0.0),
+        is_global_time=True,
+        params={
+            "asset_cfg": SceneEntityCfg("platform"),
+            "amplitude_m": 1.0,
+            "frequency_hz": 0.3,
+            "axis": "x",
+            "phase_rad": 0.0,
+            "phase_per_env": True,
+            "phase_span_rad": 2.0 * math.pi,
+        },
+    )
+
     reset_root = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",

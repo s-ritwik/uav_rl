@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
+
+import torch
+from isaaclab.assets import RigidObject
+from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -83,3 +88,55 @@ def add_platform_top_decal(
         st_primvar.Set([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
 
         UsdShade.MaterialBindingAPI(decal_mesh.GetPrim()).Bind(material)
+
+
+def move_platform_sinusoidal(
+    env: "ManagerBasedEnv",
+    env_ids: Sequence[int] | torch.Tensor | slice | None,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
+    amplitude_m: float = 1.0,
+    frequency_hz: float = 0.3,
+    axis: str = "x",
+    phase_rad: float = 0.0,
+    phase_per_env: bool = True,
+    phase_span_rad: float = 2.0 * math.pi,
+) -> None:
+    """Move a rigid platform sinusoidally in environment-local frame."""
+    platform: RigidObject = env.scene[asset_cfg.name]
+
+    if env_ids is None or isinstance(env_ids, slice):
+        env_ids_tensor = torch.arange(env.scene.num_envs, device=platform.device, dtype=torch.long)
+    elif isinstance(env_ids, torch.Tensor):
+        env_ids_tensor = env_ids.to(device=platform.device, dtype=torch.long)
+    else:
+        env_ids_tensor = torch.tensor(env_ids, device=platform.device, dtype=torch.long)
+
+    if env_ids_tensor.numel() == 0:
+        return
+
+    axis_id = {"x": 0, "y": 1, "z": 2}.get(axis.lower())
+    if axis_id is None:
+        raise ValueError(f"Unsupported platform motion axis '{axis}'. Use one of: x, y, z.")
+
+    time_s = float(env.common_step_counter) * float(env.step_dt)
+    omega_t = (2.0 * math.pi * float(frequency_hz) * time_s) + float(phase_rad)
+
+    if phase_per_env:
+        # Spread phase offsets across env IDs in [0, phase_span_rad).
+        env_phase = float(phase_span_rad) * env_ids_tensor.to(dtype=torch.float32) / float(max(env.scene.num_envs, 1))
+        offsets = float(amplitude_m) * torch.sin(omega_t + env_phase)
+    else:
+        shared_offset = float(amplitude_m) * math.sin(omega_t)
+        offsets = torch.full((env_ids_tensor.numel(),), shared_offset, device=platform.device, dtype=torch.float32)
+
+    default_state = platform.data.default_root_state[env_ids_tensor]
+    pos_local = default_state[:, 0:3].clone()
+    quat_local = default_state[:, 3:7]
+    pos_local[:, axis_id] += offsets.to(dtype=pos_local.dtype)
+
+    pos_world = pos_local + env.scene.env_origins[env_ids_tensor]
+    pose_world = torch.cat((pos_world, quat_local), dim=-1)
+    platform.write_root_pose_to_sim(pose_world, env_ids=env_ids_tensor)
+
+    zero_vel = torch.zeros((env_ids_tensor.numel(), 6), device=platform.device)
+    platform.write_root_velocity_to_sim(zero_vel, env_ids=env_ids_tensor)

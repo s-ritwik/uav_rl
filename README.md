@@ -127,29 +127,19 @@ The ideal setup would be full PX4 SITL in the loop, but at `--num_envs ~ 2048` t
 
 ```mermaid
 flowchart TD
-    A[Policy output
-raw action = [vx, vy, vz, yaw_rate]] --> B[Action processing
-scale + offset + clip]
-    B --> C[Velocity PID
-vel_sp - vel_w -> accel_sp]
-    C --> D[Accel+Yaw -> Attitude
-force_sp, thrust_sp, q_sp]
-    D --> E[Attitude P
-q,q_sp -> rates_sp]
-    E --> F[Rate PID
-rates_sp - rates_b -> torque_sp]
-    F --> G[Rotor allocation
-(thrust_sp, torque_sp) -> rotor_omega]
-    G --> H[HIL mapper
-rotor_omega <-> HIL_ACTUATOR_CONTROLS]
-    H --> I[Motor model
-omega -> rotor forces + rolling moment]
-    I --> J[Isaac Sim wrench apply
-rotor forces + body drag + body torque]
-    J --> K[Physics step]
-    K --> L[State feedback
-attitude, rates, vel] 
+    A["Policy output @25Hz<br/>raw action = [vx, vy, vz, yaw_rate]"] --> B["Action processing<br/>scale + offset + clip"]
+    B --> C["Velocity PID<br/>vel_sp - vel_w -> accel_sp"]
+    C --> D["Accel + Yaw to Attitude<br/>force_sp, thrust_sp, q_sp"]
+    D --> E["Attitude P<br/>q and q_sp -> rates_sp"]
+    E --> F["Rate PID<br/>rates_sp - rates_b -> torque_sp"]
+    F --> G["Rotor allocation<br/>(thrust_sp, torque_sp) -> rotor_omega"]
+    G --> H["HIL mapper<br/>rotor_omega to/from HIL_ACTUATOR_CONTROLS"]
+    H --> I["Motor model<br/>omega -> rotor forces + rolling moment"]
+    I --> J["Isaac Sim wrench apply<br/>rotor forces + body drag + body torque"]
+    J --> K[Physics step  @250Hz]
+    K --> L["State feedback<br/>attitude, rates, vel"]
     L --> C
+    L --> A
 ```
 
 ### Equations used in the pipeline
