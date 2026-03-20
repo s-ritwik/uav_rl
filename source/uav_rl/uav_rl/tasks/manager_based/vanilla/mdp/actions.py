@@ -7,10 +7,12 @@ import torch
 
 from isaaclab.assets import Articulation
 from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
+from isaaclab.utils.buffers import DelayBuffer
 from isaaclab.utils import configclass
 from isaaclab.utils.math import quat_apply_inverse
 
 from ..controllers import PX4LikeVelocityController, RotorAllocator, RotorMotorModel, quat_wxyz_to_xyzw
+from .randomization import apply_controller_state_estimation_noise, get_domain_randomization_state
 
 
 @configclass
@@ -112,6 +114,14 @@ class PX4LikeVelocityAction(ActionTerm):
         self._velocity_limits = torch.tensor(self.cfg.velocity_limits, device=self.device)
         self._rotor_direction = torch.tensor(self.cfg.rot_dir, device=self.device, dtype=self._raw_actions.dtype).unsqueeze(0)
         self._rotor_visual_joint_vel = torch.zeros((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
+        self._thrust_asymmetry_scale = torch.ones((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
+        self._motor_lag_alpha = torch.ones((self.num_envs, 1), device=self.device, dtype=self._raw_actions.dtype)
+
+        domain_rand_cfg = getattr(env.cfg, "domain_randomization", None)
+        max_action_delay = 0
+        if domain_rand_cfg is not None:
+            max_action_delay = int(domain_rand_cfg.action_delay_steps_range[1])
+        self._action_delay_buffer = DelayBuffer(max_action_delay, self.num_envs, self.device)
 
         self._controller = PX4LikeVelocityController(
             num_envs=self.num_envs,
@@ -188,8 +198,9 @@ class PX4LikeVelocityAction(ActionTerm):
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
+        delayed_actions = self._action_delay_buffer.compute(actions)
 
-        processed = self._raw_actions * self._action_scale + self._action_offset
+        processed = delayed_actions * self._action_scale + self._action_offset
         processed[:, :3] = torch.clamp(processed[:, :3], min=-self._velocity_limits, max=self._velocity_limits)
         processed[:, 3] = torch.clamp(processed[:, 3], min=-self.cfg.yaw_rate_limit, max=self.cfg.yaw_rate_limit)
 
@@ -279,6 +290,7 @@ class PX4LikeVelocityAction(ActionTerm):
 
     def _apply_cached_wrench(self):
         rotor_forces, rolling_moment = self._motor_model.omega_to_forces(self._cached_motor_omega)
+        rotor_forces = rotor_forces * self._thrust_asymmetry_scale
         drag_force = self._motor_model.body_drag(self._asset.data.root_lin_vel_b)
 
         self._forces.zero_()
@@ -299,9 +311,13 @@ class PX4LikeVelocityAction(ActionTerm):
     def _compute_next_command(self):
         self._maybe_initialize_allocator()
 
-        attitude_xyzw = quat_wxyz_to_xyzw(self._asset.data.root_quat_w)
+        attitude_wxyz = self._asset.data.root_quat_w
         body_rates = self._asset.data.root_ang_vel_b
         velocity_w = self._asset.data.root_lin_vel_w
+        attitude_wxyz, body_rates, velocity_w = apply_controller_state_estimation_noise(
+            self._env, attitude_wxyz, body_rates, velocity_w
+        )
+        attitude_xyzw = quat_wxyz_to_xyzw(attitude_wxyz)
 
         outputs = self._controller.step_velocity_mode(
             attitude_xyzw=attitude_xyzw,
@@ -316,9 +332,11 @@ class PX4LikeVelocityAction(ActionTerm):
         self._last_torque_sp = outputs["torque_sp"]
         self._last_thrust_sp = outputs["thrust_sp"]
 
-        motor_omega = self._allocator.force_torque_to_omega(outputs["thrust_sp"], outputs["torque_sp"])
-        self._last_hil_controls = self._controller.hil_mapper.motor_omega_to_hil_controls(motor_omega)
-        self._cached_motor_omega = self._controller.hil_mapper.hil_controls_to_motor_omega(self._last_hil_controls)
+        desired_motor_omega = self._allocator.force_torque_to_omega(outputs["thrust_sp"], outputs["torque_sp"])
+        self._cached_motor_omega = self._cached_motor_omega + self._motor_lag_alpha * (
+            desired_motor_omega - self._cached_motor_omega
+        )
+        self._last_hil_controls = self._controller.hil_mapper.motor_omega_to_hil_controls(self._cached_motor_omega)
 
     def apply_actions(self):
         # 1) Apply command computed on previous physics tick.
@@ -337,6 +355,9 @@ class PX4LikeVelocityAction(ActionTerm):
             self._last_torque_sp.zero_()
             self._last_thrust_sp.zero_()
             self._controller.reset(None)
+            self._action_delay_buffer.set_time_lag(0)
+            self._action_delay_buffer.reset()
+            self._sync_domain_randomization(None)
             if self._propeller_visual_enabled and len(self._rotor_joint_ids) == 4:
                 self._rotor_visual_joint_vel.zero_()
                 self._asset.write_joint_velocity_to_sim(self._rotor_visual_joint_vel, joint_ids=self._rotor_joint_ids)
@@ -356,6 +377,8 @@ class PX4LikeVelocityAction(ActionTerm):
         self._last_torque_sp[ids] = 0.0
         self._last_thrust_sp[ids] = 0.0
         self._controller.reset(ids)
+        self._action_delay_buffer.reset(ids)
+        self._sync_domain_randomization(ids)
         if self._propeller_visual_enabled and len(self._rotor_joint_ids) == 4:
             self._rotor_visual_joint_vel[ids] = 0.0
             self._asset.write_joint_velocity_to_sim(
@@ -363,6 +386,31 @@ class PX4LikeVelocityAction(ActionTerm):
                 joint_ids=self._rotor_joint_ids,
                 env_ids=ids,
             )
+
+    def _sync_domain_randomization(self, env_ids: torch.Tensor | None):
+        state = get_domain_randomization_state(self._env)
+        if env_ids is None:
+            ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        else:
+            ids = env_ids.to(device=self.device, dtype=torch.long)
+
+        if state is None or not state.cfg.enabled:
+            self._action_delay_buffer.set_time_lag(0, ids)
+            self._thrust_asymmetry_scale[ids] = 1.0
+            self._motor_lag_alpha[ids] = 1.0
+            return
+
+        self._action_delay_buffer.set_time_lag(state.action_delay_steps[ids], ids)
+        self._thrust_asymmetry_scale[ids] = state.thrust_asymmetry_scale[ids].to(
+            device=self.device, dtype=self._raw_actions.dtype
+        )
+
+        tau_s = state.motor_lag_tau_s[ids].to(device=self.device, dtype=self._raw_actions.dtype).unsqueeze(-1)
+        alpha = torch.ones_like(tau_s)
+        active_mask = state.motor_lag_active[ids].unsqueeze(-1)
+        dt = float(self._env.physics_dt)
+        alpha[active_mask] = dt / torch.clamp(tau_s[active_mask] + dt, min=1.0e-6)
+        self._motor_lag_alpha[ids] = torch.clamp(alpha, min=0.0, max=1.0)
 
 
 PX4LikeVelocityActionCfg.class_type = PX4LikeVelocityAction

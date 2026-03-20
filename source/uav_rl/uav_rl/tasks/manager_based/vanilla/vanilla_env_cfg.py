@@ -22,6 +22,88 @@ PLATFORM_ARUCO_TEXTURE_PATH = (
     Path(__file__).resolve().parents[3] / "assets" / "Aruco" / "aruco_mark_fractal.png"
 )
 
+DOMAIN_RANDOMIZATION_CFG = mdp.VanillaDomainRandomizationCfg(
+    enabled=False,
+    mass_noise_enabled=True,
+    mass_noise_probability=0.5,
+    mass_noise_std_kg=0.1,
+    mass_noise_clip_kg=0.3,
+    action_delay_enabled=True,
+    action_delay_probability=0.5,
+    action_delay_steps_range=(1, 3),
+    state_estimation_noise_enabled=True,
+    state_estimation_noise_probability=0.5,
+    position_noise_std_m=0.02,
+    linear_velocity_noise_std_mps=0.03,
+    angular_velocity_noise_std_rps=0.03,
+    attitude_noise_std_rad=0.015,
+    projected_gravity_noise_std=0.02,
+    thrust_asymmetry_enabled=True,
+    thrust_asymmetry_probability=0.5,
+    thrust_asymmetry_scale_range=(0.9, 1.1),
+    motor_lag_enabled=True,
+    motor_lag_probability=0.5,
+    motor_lag_time_constant_s_range=(0.02, 0.08),
+)
+
+PLATFORM_STAGE_TRACK_XY = mdp.PlatformMotionStageCfg(
+    name="track_xy",
+    x=mdp.HarmonicAxisMotionCfg(
+        enabled=True,
+        num_terms_range=(2, 8),
+        amplitude_range=(0.4, 2),
+        frequency_range_hz=(0.2, 0.4),
+        phase_range_rad=(0.0, 2.0 * math.pi),
+        spectral_decay=1.0,
+    ),
+    y=mdp.HarmonicAxisMotionCfg(
+        enabled=True,
+        num_terms_range=(2, 8),
+        amplitude_range=(0.4, 2),
+        frequency_range_hz=(0.2, 0.4),
+        phase_range_rad=(0.0, 2.0 * math.pi),
+        spectral_decay=1.0,
+    ),
+    max_linear_speed=1.2,
+    max_linear_acceleration=5.0,
+)
+
+PLATFORM_STAGE_TRACK_XY_ROLL_PITCH = PLATFORM_STAGE_TRACK_XY.replace(
+    name="track_xy_roll_pitch",
+    roll=mdp.HarmonicAxisMotionCfg(
+        enabled=True,
+        num_terms_range=(2, 6),
+        amplitude_range=(0.02, 0.10),
+        frequency_range_hz=(0.05, 0.25),
+        phase_range_rad=(0.0, 2.0 * math.pi),
+        spectral_decay=1.0,
+    ),
+    pitch=mdp.HarmonicAxisMotionCfg(
+        enabled=True,
+        num_terms_range=(2, 6),
+        amplitude_range=(0.02, 0.10),
+        frequency_range_hz=(0.05, 0.25),
+        phase_range_rad=(0.0, 2.0 * math.pi),
+        spectral_decay=1.0,
+    ),
+    max_angular_speed=0.75,
+    max_angular_acceleration=2.5,
+)
+
+PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_HEAVE = PLATFORM_STAGE_TRACK_XY_ROLL_PITCH.replace(
+    name="track_xy_roll_pitch_heave",
+    z=mdp.HarmonicAxisMotionCfg(
+        enabled=True,
+        num_terms_range=(2, 6),
+        amplitude_range=(0.02, 0.10),
+        frequency_range_hz=(0.05, 0.25),
+        phase_range_rad=(0.0, 2.0 * math.pi),
+        spectral_decay=1.0,
+    ),
+    max_linear_speed=2.25,
+    max_linear_acceleration=6.0,
+)
+
 
 @configclass
 class VanillaSceneCfg(InteractiveSceneCfg):
@@ -74,7 +156,7 @@ class ActionsCfg:
         asset_name="robot",
         action_scale=(1.0, 1.0, 1.0, 1.0),
         action_offset=(0.0, 0.0, 0.0, 0.0),
-        velocity_limits=(6.0, 6.0, 4.0),
+        velocity_limits=(1.2, 1.2, 1),
         yaw_rate_limit=3.0,
     )
 
@@ -86,13 +168,11 @@ class ObservationsCfg:
     @configclass
     class PolicyCfg(ObsGroup):
         root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
-        root_quat_w = ObsTerm(func=mdp.root_quat_w)
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
+        root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
+        root_ang_vel_rel = ObsTerm(func=mdp.root_ang_vel_rel)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
         last_action = ObsTerm(func=mdp.last_action)
-        command_velocity = ObsTerm(func=mdp.command_velocity)
-        command_yaw_rate = ObsTerm(func=mdp.command_yaw_rate)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -105,6 +185,15 @@ class ObservationsCfg:
 class EventCfg:
     """Environment reset terms."""
 
+    domain_randomization = EventTerm(
+        func=mdp.SampleVanillaDomainRandomization,
+        mode="reset",
+        params={
+            "rand_cfg": DOMAIN_RANDOMIZATION_CFG,
+            "mass_asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
+        },
+    )
+
     add_platform_top_decal = EventTerm(
         func=mdp.add_platform_top_decal,
         mode="startup",
@@ -116,18 +205,14 @@ class EventCfg:
     )
 
     move_platform = EventTerm(
-        func=mdp.move_platform_sinusoidal,
+        func=mdp.MultiSinePlatformMotion,
         mode="interval",
         interval_range_s=(0.0, 0.0),
         is_global_time=True,
         params={
             "asset_cfg": SceneEntityCfg("platform"),
-            "amplitude_m": 1.0,
-            "frequency_hz": 0.3,
-            "axis": "x",
-            "phase_rad": 0.0,
-            "phase_per_env": True,
-            "phase_span_rad": 2.0 * math.pi,
+            # Swap this preset as training progresses: XY -> deck attitude -> heave.
+            "stage_cfg": PLATFORM_STAGE_TRACK_XY,
         },
     )
 
@@ -136,10 +221,10 @@ class EventCfg:
         mode="reset",
         params={
             "pose_range": {
-                "x": (-1.0, 1.0),
-                "y": (-1.0, 1.0),
-                "z": (0.8, 1.2),
-                "roll": (-0.15, 0.15),
+                "x": (-5.0, 5.0),
+                "y": (-5.0, 5.0),
+                "z": (0.7, 5),
+                "roll": (-0.2, 0.2),
                 "pitch": (-0.15, 0.15),
                 "yaw": (-math.pi, math.pi),
             },
@@ -173,15 +258,15 @@ class RewardsCfg:
             "reference_asset_cfg": SceneEntityCfg("platform"),
         },
     )
-    horizontal_position = RewTerm(
-        func=mdp.horizontal_position_error_l2,
-        weight=-1.5,
-        params={
-            "target_xy": (0.0, 0.0),
-            "asset_cfg": SceneEntityCfg("robot"),
-            "reference_asset_cfg": SceneEntityCfg("platform"),
-        },
-    )
+    # horizontal_position = RewTerm(
+    #     func=mdp.horizontal_position_error_l2,
+    #     weight=-1.5,
+    #     params={
+    #         "target_xy": (0.0, 0.0),
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #         "reference_asset_cfg": SceneEntityCfg("platform"),
+    #     },
+    # )
     vertical_position = RewTerm(
         func=mdp.vertical_position_error_l1,
         weight=-2.0,
@@ -198,11 +283,19 @@ class RewardsCfg:
     angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.05)
     yaw_error = RewTerm(
         func=mdp.yaw_error_l2,
-        weight=-0.25,
+        weight=-1,
         params={"target_yaw": 0.0, "asset_cfg": SceneEntityCfg("robot")},
     )
     upright = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")})
-
+    # horizontal_velocity_match = RewTerm(
+    #     func=mdp.horizontal_velocity_error_l2,
+    #     weight=-0.5,
+    #     params={
+    #         "target_rel_xy": (0.0, 0.0),
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #         "reference_asset_cfg": SceneEntityCfg("platform"),
+    #     },
+    # )
     # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
     # action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.003)
 
@@ -215,7 +308,8 @@ class TerminationsCfg:
     capsule_contact = DoneTerm(
         func=mdp.illegal_contact_with_debug,
         params={
-            # ContactSensor resolves rigid-body names, not mesh child prim names.
+            # ContactSensor resolves rigid-body names, not mesh child prim names, so I've added a negligible mass Capsule 
+            # collider to the main body of the Iris USD and track that body's contacts here.
             # In this USD, available bodies are: body, rotor0, rotor1, rotor2, rotor3.
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),
             "threshold": 1.0,
@@ -223,16 +317,17 @@ class TerminationsCfg:
         },
     )
     crash_low = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.1})
-    crash_high = DoneTerm(func=mdp.root_height_above_maximum, params={"maximum_height": 4.0})
-    out_of_bounds = DoneTerm(func=mdp.root_distance_from_origin, params={"max_distance": 5.0})
+    crash_high = DoneTerm(func=mdp.root_height_above_maximum, params={"maximum_height": 7.0})
+    out_of_bounds = DoneTerm(func=mdp.root_distance_from_origin, params={"max_distance": 9.0})
 
 
 @configclass
 class VanillaEnvCfg(ManagerBasedRLEnvCfg):
     """Manager-based vanilla UAV environment using Iris + PX4-like controller."""
 
-    scene: VanillaSceneCfg = VanillaSceneCfg(num_envs=1024, env_spacing=4.0)
+    scene: VanillaSceneCfg = VanillaSceneCfg(num_envs=1024, env_spacing=10.0)
 
+    domain_randomization: mdp.VanillaDomainRandomizationCfg = DOMAIN_RANDOMIZATION_CFG
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventCfg = EventCfg()
@@ -242,6 +337,7 @@ class VanillaEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         self.decimation = 10
         self.episode_length_s = 10.0
+        self.events.domain_randomization.params["rand_cfg"] = self.domain_randomization
 
         # Required so contact sensors receive contact reports from the USD articulation.
         self.scene.robot.spawn.activate_contact_sensors = True

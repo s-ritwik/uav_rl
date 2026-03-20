@@ -56,6 +56,7 @@ def horizontal_position_error_l2(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
 ) -> torch.Tensor:
+    """Reward to follow the platform center in the horizontal plane."""
     pos_rel = _relative_position(env, asset_cfg, reference_asset_cfg)
     target = _target_tensor(env, target_xy, pos_rel.dtype)
     return torch.sum(torch.square(pos_rel[:, :2] - target), dim=1)
@@ -80,6 +81,20 @@ def horizontal_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Sc
     """Penalize horizontal (x,y) linear speed for hover-in-place behavior."""
     asset: RigidObject = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.root_lin_vel_w[:, :2]), dim=1)
+
+
+def horizontal_velocity_error_l2(
+    env: "ManagerBasedRLEnv",
+    target_rel_xy: tuple[float, float] = (0.0, 0.0),
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
+) -> torch.Tensor:
+    """Penalize horizontal velocity error relative to a reference asset (platform by default)."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
+    rel_vel_xy = asset.data.root_lin_vel_w[:, :2] - reference_asset.data.root_lin_vel_w[:, :2]
+    target = _target_tensor(env, target_rel_xy, rel_vel_xy.dtype)
+    return torch.sum(torch.square(rel_vel_xy - target), dim=1)
 
 
 def vertical_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
