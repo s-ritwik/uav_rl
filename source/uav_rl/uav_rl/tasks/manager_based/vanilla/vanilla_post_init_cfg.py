@@ -20,7 +20,7 @@ class VanillaRewardWeightsCfg:
     vertical_position: float = -2.0
     horizontal_speed: float = -0.08
     vertical_speed: float = -0.08
-    angular_rate: float = -0.05
+    angular_rate: float = -0.1
     yaw_error: float = -1.0
     upright: float = -3.0
 
