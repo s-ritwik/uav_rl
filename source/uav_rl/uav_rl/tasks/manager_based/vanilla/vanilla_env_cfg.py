@@ -17,93 +17,11 @@ from isaaclab.utils import configclass
 from uav_rl.assets import IRIS_CFG
 
 from . import mdp
+from .vanilla_post_init_cfg import PLATFORM_STAGE_TRACK_XY_CFG, VanillaPostInitCfg
 
 PLATFORM_ARUCO_TEXTURE_PATH = (
     Path(__file__).resolve().parents[3] / "assets" / "Aruco" / "aruco_mark_fractal.png"
 )
-
-DOMAIN_RANDOMIZATION_CFG = mdp.VanillaDomainRandomizationCfg(
-    enabled=False,
-    mass_noise_enabled=True,
-    mass_noise_probability=0.5,
-    mass_noise_std_kg=0.1,
-    mass_noise_clip_kg=0.3,
-    action_delay_enabled=True,
-    action_delay_probability=0.5,
-    action_delay_steps_range=(1, 3),
-    state_estimation_noise_enabled=True,
-    state_estimation_noise_probability=0.5,
-    position_noise_std_m=0.02,
-    linear_velocity_noise_std_mps=0.03,
-    angular_velocity_noise_std_rps=0.03,
-    attitude_noise_std_rad=0.015,
-    projected_gravity_noise_std=0.02,
-    thrust_asymmetry_enabled=True,
-    thrust_asymmetry_probability=0.5,
-    thrust_asymmetry_scale_range=(0.9, 1.1),
-    motor_lag_enabled=True,
-    motor_lag_probability=0.5,
-    motor_lag_time_constant_s_range=(0.02, 0.08),
-)
-
-PLATFORM_STAGE_TRACK_XY = mdp.PlatformMotionStageCfg(
-    name="track_xy",
-    x=mdp.HarmonicAxisMotionCfg(
-        enabled=True,
-        num_terms_range=(2, 8),
-        amplitude_range=(0.4, 2),
-        frequency_range_hz=(0.2, 0.4),
-        phase_range_rad=(0.0, 2.0 * math.pi),
-        spectral_decay=1.0,
-    ),
-    y=mdp.HarmonicAxisMotionCfg(
-        enabled=True,
-        num_terms_range=(2, 8),
-        amplitude_range=(0.4, 2),
-        frequency_range_hz=(0.2, 0.4),
-        phase_range_rad=(0.0, 2.0 * math.pi),
-        spectral_decay=1.0,
-    ),
-    max_linear_speed=1.2,
-    max_linear_acceleration=5.0,
-)
-
-PLATFORM_STAGE_TRACK_XY_ROLL_PITCH = PLATFORM_STAGE_TRACK_XY.replace(
-    name="track_xy_roll_pitch",
-    roll=mdp.HarmonicAxisMotionCfg(
-        enabled=True,
-        num_terms_range=(2, 6),
-        amplitude_range=(0.02, 0.10),
-        frequency_range_hz=(0.05, 0.25),
-        phase_range_rad=(0.0, 2.0 * math.pi),
-        spectral_decay=1.0,
-    ),
-    pitch=mdp.HarmonicAxisMotionCfg(
-        enabled=True,
-        num_terms_range=(2, 6),
-        amplitude_range=(0.02, 0.10),
-        frequency_range_hz=(0.05, 0.25),
-        phase_range_rad=(0.0, 2.0 * math.pi),
-        spectral_decay=1.0,
-    ),
-    max_angular_speed=0.75,
-    max_angular_acceleration=2.5,
-)
-
-PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_HEAVE = PLATFORM_STAGE_TRACK_XY_ROLL_PITCH.replace(
-    name="track_xy_roll_pitch_heave",
-    z=mdp.HarmonicAxisMotionCfg(
-        enabled=True,
-        num_terms_range=(2, 6),
-        amplitude_range=(0.02, 0.10),
-        frequency_range_hz=(0.05, 0.25),
-        phase_range_rad=(0.0, 2.0 * math.pi),
-        spectral_decay=1.0,
-    ),
-    max_linear_speed=2.25,
-    max_linear_acceleration=6.0,
-)
-
 
 @configclass
 class VanillaSceneCfg(InteractiveSceneCfg):
@@ -189,7 +107,7 @@ class EventCfg:
         func=mdp.SampleVanillaDomainRandomization,
         mode="reset",
         params={
-            "rand_cfg": DOMAIN_RANDOMIZATION_CFG,
+            "rand_cfg": mdp.VanillaDomainRandomizationCfg(),
             "mass_asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
         },
     )
@@ -212,7 +130,7 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("platform"),
             # Swap this preset as training progresses: XY -> deck attitude -> heave.
-            "stage_cfg": PLATFORM_STAGE_TRACK_XY,
+            "stage_cfg": PLATFORM_STAGE_TRACK_XY_CFG,
         },
     )
 
@@ -327,7 +245,8 @@ class VanillaEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: VanillaSceneCfg = VanillaSceneCfg(num_envs=1024, env_spacing=10.0)
 
-    domain_randomization: mdp.VanillaDomainRandomizationCfg = DOMAIN_RANDOMIZATION_CFG
+    post_init_cfg: VanillaPostInitCfg = VanillaPostInitCfg()
+    domain_randomization: mdp.VanillaDomainRandomizationCfg = mdp.VanillaDomainRandomizationCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventCfg = EventCfg()
@@ -337,7 +256,7 @@ class VanillaEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         self.decimation = 10
         self.episode_length_s = 10.0
-        self.events.domain_randomization.params["rand_cfg"] = self.domain_randomization
+        self.post_init_cfg.apply(self)
 
         # Required so contact sensors receive contact reports from the USD articulation.
         self.scene.robot.spawn.activate_contact_sensors = True

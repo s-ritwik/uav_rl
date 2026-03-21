@@ -10,7 +10,7 @@ from isaaclab.utils import math as math_utils
 class VanillaDomainRandomizationCfg:
     """Domain-randomization switches and sampling ranges for the vanilla UAV task."""
 
-    enabled: bool = False
+    enabled: bool = True
 
     mass_noise_enabled: bool = True
     mass_noise_probability: float = 0.5
