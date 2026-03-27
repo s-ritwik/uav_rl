@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 import torch
+from torch import nn
 
 
 @dataclass
@@ -84,25 +85,56 @@ class RslRlPolicy:
             raise ValueError("Either `policy_jit` or `checkpoint_path` must be provided.")
 
     def _load_actor_critic_from_checkpoint(self, checkpoint_path: Path):
-        from rsl_rl.modules import ActorCritic
-
-        obs_template = {"obs": torch.zeros((1, self.spec.obs_dim), device=self.device)}
-        obs_groups = {"policy": ["obs"], "critic": ["obs"]}
-        actor_critic = ActorCritic(
-            obs=obs_template,
-            obs_groups=obs_groups,
-            num_actions=self.spec.action_dim,
-            actor_obs_normalization=self.spec.actor_obs_normalization,
-            critic_obs_normalization=self.spec.critic_obs_normalization,
-            actor_hidden_dims=list(self.spec.actor_hidden_dims),
-            critic_hidden_dims=list(self.spec.critic_hidden_dims),
-            activation=self.spec.activation,
-            init_noise_std=self.spec.init_noise_std,
-        ).to(self.device)
-
         checkpoint = torch.load(str(checkpoint_path), map_location=self.device)
-        actor_critic.load_state_dict(checkpoint["model_state_dict"], strict=True)
-        return actor_critic
+        model_state = checkpoint["model_state_dict"]
+        actor = self._build_actor_from_state_dict(model_state).to(self.device)
+        actor.load_state_dict(self._extract_actor_state_dict(model_state), strict=True)
+        return actor
+
+    def _activation_module(self) -> nn.Module:
+        activation = self.spec.activation.lower()
+        if activation == "elu":
+            return nn.ELU()
+        if activation == "relu":
+            return nn.ReLU()
+        if activation == "leaky_relu":
+            return nn.LeakyReLU()
+        if activation == "selu":
+            return nn.SELU()
+        if activation == "tanh":
+            return nn.Tanh()
+        raise ValueError(f"Unsupported activation for checkpoint reconstruction: {self.spec.activation}")
+
+    def _extract_actor_state_dict(self, model_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        actor_state: dict[str, torch.Tensor] = {}
+        for key, value in model_state.items():
+            if key.startswith("actor."):
+                actor_state[key[len("actor."):]] = value
+        if not actor_state:
+            raise KeyError("Checkpoint does not contain `actor.*` parameters.")
+        return actor_state
+
+    def _build_actor_from_state_dict(self, model_state: dict[str, torch.Tensor]) -> nn.Sequential:
+        actor_state = self._extract_actor_state_dict(model_state)
+        layer_ids = sorted(
+            {
+                int(match.group(1))
+                for key in actor_state
+                if (match := re.match(r"(\d+)\.weight$", key)) is not None
+            }
+        )
+        if not layer_ids:
+            raise KeyError("Checkpoint actor state dict does not contain linear layer weights.")
+
+        modules: list[nn.Module] = []
+        last_layer_id = layer_ids[-1]
+        for layer_id in layer_ids:
+            weight = actor_state[f"{layer_id}.weight"]
+            out_features, in_features = weight.shape
+            modules.append(nn.Linear(in_features, out_features))
+            if layer_id != last_layer_id:
+                modules.append(self._activation_module())
+        return nn.Sequential(*modules)
 
     @torch.inference_mode()
     def act(self, obs: torch.Tensor) -> torch.Tensor:
@@ -112,5 +144,4 @@ class RslRlPolicy:
 
         if self._mode == "jit":
             return self._module(obs)
-        return self._module.act_inference({"obs": obs})
-
+        return self._module(obs)

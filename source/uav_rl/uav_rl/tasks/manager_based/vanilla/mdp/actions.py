@@ -40,9 +40,9 @@ class PX4LikeVelocityActionCfg(ActionTermCfg):
     max_tilt_deg: float = 50.0
     thrust_limits: tuple[float, float] = (0.0, 35.0)
 
-    velocity_p_gains: tuple[float, float, float] = (4.0, 4.0, 6.5)
-    velocity_i_gains: tuple[float, float, float] = (0.2, 0.2, 1.4)
-    velocity_d_gains: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    velocity_p_gains: tuple[float, float, float] = (1.8, 1.8, 4.0)
+    velocity_i_gains: tuple[float, float, float] = (0.4, 0.4, 2)
+    velocity_d_gains: tuple[float, float, float] = (0.2, 0.2, 0.0)
     velocity_integrator_limits: tuple[float, float, float] = (2.0, 2.0, 2.0)
     velocity_accel_limits: tuple[float, float, float] = (8.0, 6.0, 6.0)
 
@@ -123,6 +123,16 @@ class PX4LikeVelocityAction(ActionTerm):
             max_action_delay = int(domain_rand_cfg.action_delay_steps_range[1])
         self._action_delay_buffer = DelayBuffer(max_action_delay, self.num_envs, self.device)
 
+        self._nominal_velocity_p_gains = torch.tensor(
+            self.cfg.velocity_p_gains, device=self.device, dtype=self._raw_actions.dtype
+        ).repeat(self.num_envs, 1)
+        self._nominal_velocity_i_gains = torch.tensor(
+            self.cfg.velocity_i_gains, device=self.device, dtype=self._raw_actions.dtype
+        ).repeat(self.num_envs, 1)
+        self._nominal_velocity_d_gains = torch.tensor(
+            self.cfg.velocity_d_gains, device=self.device, dtype=self._raw_actions.dtype
+        ).repeat(self.num_envs, 1)
+
         self._controller = PX4LikeVelocityController(
             num_envs=self.num_envs,
             device=self.device,
@@ -167,6 +177,10 @@ class PX4LikeVelocityAction(ActionTerm):
 
         self._forces = torch.zeros((self.num_envs, 5, 3), device=self.device)
         self._torques = torch.zeros((self.num_envs, 5, 3), device=self.device)
+
+        self._controller._cascade.velocity_controller.p_gains = self._nominal_velocity_p_gains.clone()
+        self._controller._cascade.velocity_controller.i_gains = self._nominal_velocity_i_gains.clone()
+        self._controller._cascade.velocity_controller.d_gains = self._nominal_velocity_d_gains.clone()
 
     @property
     def action_dim(self) -> int:
@@ -398,6 +412,9 @@ class PX4LikeVelocityAction(ActionTerm):
             self._action_delay_buffer.set_time_lag(0, ids)
             self._thrust_asymmetry_scale[ids] = 1.0
             self._motor_lag_alpha[ids] = 1.0
+            self._controller._cascade.velocity_controller.p_gains[ids] = self._nominal_velocity_p_gains[ids]
+            self._controller._cascade.velocity_controller.i_gains[ids] = self._nominal_velocity_i_gains[ids]
+            self._controller._cascade.velocity_controller.d_gains[ids] = self._nominal_velocity_d_gains[ids]
             return
 
         self._action_delay_buffer.set_time_lag(state.action_delay_steps[ids], ids)
@@ -411,6 +428,22 @@ class PX4LikeVelocityAction(ActionTerm):
         dt = float(self._env.physics_dt)
         alpha[active_mask] = dt / torch.clamp(tau_s[active_mask] + dt, min=1.0e-6)
         self._motor_lag_alpha[ids] = torch.clamp(alpha, min=0.0, max=1.0)
+
+        self._controller._cascade.velocity_controller.p_gains[ids] = torch.clamp(
+            self._nominal_velocity_p_gains[ids]
+            + state.velocity_p_gain_delta[ids].to(device=self.device, dtype=self._raw_actions.dtype),
+            min=0.0,
+        )
+        self._controller._cascade.velocity_controller.i_gains[ids] = torch.clamp(
+            self._nominal_velocity_i_gains[ids]
+            + state.velocity_i_gain_delta[ids].to(device=self.device, dtype=self._raw_actions.dtype),
+            min=0.0,
+        )
+        self._controller._cascade.velocity_controller.d_gains[ids] = torch.clamp(
+            self._nominal_velocity_d_gains[ids]
+            + state.velocity_d_gain_delta[ids].to(device=self.device, dtype=self._raw_actions.dtype),
+            min=0.0,
+        )
 
 
 PX4LikeVelocityActionCfg.class_type = PX4LikeVelocityAction

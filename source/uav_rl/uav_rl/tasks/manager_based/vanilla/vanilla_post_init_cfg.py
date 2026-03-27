@@ -20,9 +20,9 @@ class VanillaRewardWeightsCfg:
     vertical_position: float = -2.0
     horizontal_speed: float = -0.08
     vertical_speed: float = -0.08
-    angular_rate: float = -0.1
+    angular_rate: float = -0.05
     yaw_error: float = -1.0
-    upright: float = -3.0
+    upright: float = -2.0
 
 
 @configclass
@@ -169,27 +169,40 @@ class VanillaPostInitCfg:
     platform_motion: VanillaPlatformMotionCfg = VanillaPlatformMotionCfg()
 
     domain_randomization: mdp.VanillaDomainRandomizationCfg = mdp.VanillaDomainRandomizationCfg(
+        # Flag for overall DR enable/disable
         enabled=True,
+        # Additive noise on mass
         mass_noise_enabled=True,
         mass_noise_probability=0.5,
         mass_noise_std_kg=0.1,
         mass_noise_clip_kg=0.3,
+        # Action delay DR
         action_delay_enabled=True,
         action_delay_probability=0.3,
         action_delay_steps_range=(1, 3),
+        # State estimation noise DR
         state_estimation_noise_enabled=True,
         state_estimation_noise_probability=0.5,
         position_noise_std_m=0.03,
+        # unmodeled dynamics and disturbances.
         linear_velocity_noise_std_mps=0.08,
         angular_velocity_noise_std_rps=0.04,
         attitude_noise_std_rad=0.015,
         projected_gravity_noise_std=0.04,
+        # Thrust asymmetry DR
         thrust_asymmetry_enabled=True,
         thrust_asymmetry_probability=0.5,
         thrust_asymmetry_scale_range=(0.9, 1.1),
+        # Motor lag DR
         motor_lag_enabled=True,
         motor_lag_probability=0.4,
         motor_lag_time_constant_s_range=(0.02, 0.08),
+        # Domain randomisation on  Vel PID Gains
+        velocity_gain_noise_enabled=True,
+        velocity_gain_noise_probability=0.3,
+        velocity_p_gain_noise_std=(0.15, 0.15, 0.35),
+        velocity_i_gain_noise_std=(0.05, 0.05, 0.20),
+        velocity_d_gain_noise_std=(0.03, 0.03, 0.05),
     )
 
     def apply(self, env_cfg: VanillaEnvCfg) -> None:

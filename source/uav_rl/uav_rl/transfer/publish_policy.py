@@ -25,9 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-name", type=str, default=None, help="Checkpoint filename inside the run directory.")
     parser.add_argument("--log-root", type=str, default=_default_log_root(), help="Root folder for vanilla logs.")
     parser.add_argument("--policy-device", type=str, default=None, help="Torch device for policy inference.")
-    parser.add_argument("--velocity-limit-x", type=float, default=6.0)
-    parser.add_argument("--velocity-limit-y", type=float, default=6.0)
-    parser.add_argument("--velocity-limit-z", type=float, default=4.0)
+    parser.add_argument("--velocity-limit-x", type=float, default=1.2)
+    parser.add_argument("--velocity-limit-y", type=float, default=1.2)
+    parser.add_argument("--velocity-limit-z", type=float, default=1.0)
     parser.add_argument("--yaw-rate-limit", type=float, default=3.0)
     parser.add_argument("--debug-every", type=int, default=0, help="Print action debug every N policy steps.")
     return parser
@@ -247,7 +247,7 @@ def _run(args) -> None:
             rel_ang_vel = platform_rot.inv().apply(robot_ang_vel_w - self.platform_ang_vel_w)
 
             projected_gravity = robot_rot.inv().apply(np.array([0.0, 0.0, -1.0], dtype=np.float32))
-
+            print(f"rel_pos: {rel_pos}, rel_lin_vel: {rel_lin_vel}")
             return np.concatenate(
                 (
                     rel_pos.astype(np.float32),
@@ -260,15 +260,13 @@ def _run(args) -> None:
             )
 
         def _publish_cmd(self, world_velocity_sp: np.ndarray, yaw_rate_sp: float):
-            robot_rot = Rotation.from_quat(self.robot_quat_xyzw)
-            body_velocity_flu = robot_rot.inv().apply(world_velocity_sp.astype(np.float64))
-
             msg = Twist()
-            msg.linear.x = float(body_velocity_flu[0])
-            msg.linear.y = float(body_velocity_flu[1])
-            msg.linear.z = float(body_velocity_flu[2])
-            msg.angular.z = float(yaw_rate_sp)
+            msg.linear.x = float(world_velocity_sp[0])
+            msg.linear.y = float(world_velocity_sp[1])
+            msg.linear.z = float(world_velocity_sp[2])
+            msg.angular.z = float(0)#float(yaw_rate_sp)
             self.cmd_pub.publish(msg)
+            print(f"Published cmd_vel ENU: linear={world_velocity_sp}, angular_z={yaw_rate_sp}")
 
         def _on_timer(self):
             now = time.monotonic()

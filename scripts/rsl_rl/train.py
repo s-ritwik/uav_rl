@@ -77,6 +77,7 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 
 import logging
 import os
+import statistics
 import time
 from datetime import datetime
 
@@ -109,6 +110,109 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+
+def _maybe_warmup_ardupilot_takeoff(env, env_cfg):
+    """Step zero actions until the autopilot SITL finishes the pre-policy takeoff sequence."""
+
+    runtime_cfg = getattr(env_cfg, "runtime_cfg", None)
+    if runtime_cfg is None or not getattr(runtime_cfg, "enabled", False):
+        return
+
+    # Gymnasium wrappers require an initial reset before any step.
+    # This occurs before the ArduPilot runtime is started, so it does not
+    # interfere with the later takeoff-to-policy handoff.
+    env.reset()
+
+    try:
+        action_term = env.unwrapped.action_manager.get_term("control")
+    except Exception:
+        return
+
+    if not hasattr(action_term, "all_envs_ready_for_policy"):
+        return
+
+    zero_actions = torch.zeros(
+        (env.unwrapped.num_envs,) + env.unwrapped.single_action_space.shape,
+        device=env.unwrapped.device,
+        dtype=torch.float32,
+    )
+    warmup_timeout_s = float(getattr(runtime_cfg.reset, "ready_timeout_s", 90.0))
+    target_altitude_m = float(getattr(runtime_cfg.reset, "auto_takeoff_alt_m", 0.0))
+
+    print(
+        f"[INFO]: Autopilot warmup: waiting for {env.unwrapped.num_envs} envs to reach "
+        f"{target_altitude_m:.1f} m before PPO starts."
+    )
+
+    start_time = time.monotonic()
+    last_status_time = 0.0
+    while not action_term.all_envs_ready_for_policy():
+        _, _, terminated, time_outs, _ = env.step(zero_actions)
+        now = time.monotonic()
+        if torch.any(terminated) or torch.any(time_outs):
+            term_manager = getattr(env.unwrapped, "termination_manager", None)
+            term_debug = {}
+            if term_manager is not None:
+                for term_name in term_manager.active_terms:
+                    term_debug[term_name] = bool(torch.any(term_manager.get_term(term_name)).item())
+            raise RuntimeError(
+                "Autopilot warmup reset triggered before policy handoff. "
+                f"terminated={bool(torch.any(terminated).item())} "
+                f"time_outs={bool(torch.any(time_outs).item())} "
+                f"terms={term_debug}"
+            )
+        if now - start_time > warmup_timeout_s:
+            raise RuntimeError(
+                "Autopilot warmup timed out after "
+                f"{warmup_timeout_s:.1f}s with {action_term.num_ready_envs()}/{env.unwrapped.num_envs} envs ready."
+            )
+        if now - last_status_time >= 5.0:
+            altitudes = action_term.current_altitudes()
+            mean_altitude = statistics.mean(altitudes) if altitudes else 0.0
+            extra_status = ""
+            if hasattr(action_term, "debug_statuses"):
+                statuses = action_term.debug_statuses()
+                if statuses:
+                    status0 = statuses[0]
+                    extra_status = (
+                        ", env0 state="
+                        f"{status0.get('takeoff_state')} connected={status0.get('connected')} "
+                        f"gps={status0.get('gps_fix_ready')} pos={status0.get('position_estimate_ready')} "
+                        f"speed={float(status0.get('speed_mps', 0.0)):.2f}"
+                    )
+            print(
+                "[INFO]: Autopilot warmup status: "
+                f"{action_term.num_ready_envs()}/{env.unwrapped.num_envs} ready, "
+                f"mean altitude {mean_altitude:.2f} m{extra_status}"
+            )
+            last_status_time = now
+
+    # Let the first PPO-side reset keep the live hover state instead of disturbing SITL right after takeoff.
+    if hasattr(action_term, "skip_next_runtime_reset"):
+        action_term.skip_next_runtime_reset()
+    print("[INFO]: Autopilot warmup complete. Starting PPO rollout collection.")
+
+
+def _stop_ardupilot_runtime(env):
+    """Best-effort shutdown for SITL subprocesses owned by the action term."""
+
+    if env is None:
+        return
+
+    try:
+        action_term = env.unwrapped.action_manager.get_term("control")
+    except Exception:
+        return
+
+    runtime = getattr(action_term, "_runtime", None)
+    if runtime is None:
+        return
+
+    try:
+        runtime.stop()
+    except Exception as exc:
+        print(f"[WARN]: Failed to stop autopilot runtime cleanly: {exc}")
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -166,60 +270,70 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
 
-    # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = None
+    try:
+        # create isaac environment
+        env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
-    # convert to single-agent instance if required by the RL algorithm
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
+        # convert to single-agent instance if required by the RL algorithm
+        if isinstance(env.unwrapped, DirectMARLEnv):
+            env = multi_agent_to_single_agent(env)
 
-    # save resume path before creating a new log_dir
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        # save resume path before creating a new log_dir
+        if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
-    # wrap for video recording
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "train"),
-            "step_trigger": lambda step: step % args_cli.video_interval == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording videos during training.")
-        print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+        # wrap for video recording
+        if args_cli.video:
+            video_kwargs = {
+                "video_folder": os.path.join(log_dir, "videos", "train"),
+                "step_trigger": lambda step: step % args_cli.video_interval == 0,
+                "video_length": args_cli.video_length,
+                "disable_logger": True,
+            }
+            print("[INFO] Recording videos during training.")
+            print_dict(video_kwargs, nesting=4)
+            env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    start_time = time.time()
+        start_time = time.time()
 
-    # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+        raw_env = env
 
-    # create runner from rsl-rl
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    else:
-        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
-    # write git state to logs
-    runner.add_git_repo_to_log(__file__)
-    # load the checkpoint
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        # load previously trained model
-        runner.load(resume_path)
+        # wrap around environment for rsl-rl
+        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # dump the configuration into log-directory
-    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+        # create runner from rsl-rl
+        if agent_cfg.class_name == "OnPolicyRunner":
+            runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        elif agent_cfg.class_name == "DistillationRunner":
+            runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        else:
+            raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+        # write git state to logs
+        runner.add_git_repo_to_log(__file__)
+        # load the checkpoint
+        if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+            print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+            # load previously trained model
+            runner.load(resume_path)
 
-    # run training
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+        # dump the configuration into log-directory
+        dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+        dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    print(f"Training time: {round(time.time() - start_time, 2)} seconds")
+        # For ArduPilot-in-the-loop tasks, let SITL arm, take off, and settle immediately
+        # before PPO starts. Doing this here avoids long post-warmup pauses while the runner
+        # is still being built or checkpoints are loaded.
+        _maybe_warmup_ardupilot_takeoff(raw_env, env_cfg)
 
-    # close the simulator
-    env.close()
+        # run training
+        runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+
+        print(f"Training time: {round(time.time() - start_time, 2)} seconds")
+    finally:
+        _stop_ardupilot_runtime(env)
+        if env is not None:
+            env.close()
 
 
 if __name__ == "__main__":

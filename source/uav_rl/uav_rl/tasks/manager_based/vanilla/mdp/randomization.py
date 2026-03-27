@@ -37,6 +37,12 @@ class VanillaDomainRandomizationCfg:
     motor_lag_probability: float = 0.5
     motor_lag_time_constant_s_range: tuple[float, float] = (0.02, 0.08)
 
+    velocity_gain_noise_enabled: bool = True
+    velocity_gain_noise_probability: float = 0.3
+    velocity_p_gain_noise_std: tuple[float, float, float] = (0.15, 0.15, 0.35)
+    velocity_i_gain_noise_std: tuple[float, float, float] = (0.05, 0.05, 0.20)
+    velocity_d_gain_noise_std: tuple[float, float, float] = (0.03, 0.03, 0.05)
+
 
 class VanillaDomainRandomizationState:
     """Per-environment runtime state sampled from :class:`VanillaDomainRandomizationCfg`."""
@@ -51,11 +57,15 @@ class VanillaDomainRandomizationState:
         self.state_estimation_noise_active = torch.zeros(num_envs, dtype=torch.bool, device=device)
         self.thrust_asymmetry_active = torch.zeros(num_envs, dtype=torch.bool, device=device)
         self.motor_lag_active = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        self.velocity_gain_noise_active = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
         self.mass_delta_kg = torch.zeros(num_envs, device=device)
         self.action_delay_steps = torch.zeros(num_envs, dtype=torch.int, device=device)
         self.thrust_asymmetry_scale = torch.ones((num_envs, 4), device=device)
         self.motor_lag_tau_s = torch.zeros(num_envs, device=device)
+        self.velocity_p_gain_delta = torch.zeros((num_envs, 3), device=device)
+        self.velocity_i_gain_delta = torch.zeros((num_envs, 3), device=device)
+        self.velocity_d_gain_delta = torch.zeros((num_envs, 3), device=device)
 
     def reset_envs(self, env_ids: torch.Tensor):
         self.mass_noise_active[env_ids] = False
@@ -63,11 +73,15 @@ class VanillaDomainRandomizationState:
         self.state_estimation_noise_active[env_ids] = False
         self.thrust_asymmetry_active[env_ids] = False
         self.motor_lag_active[env_ids] = False
+        self.velocity_gain_noise_active[env_ids] = False
 
         self.mass_delta_kg[env_ids] = 0.0
         self.action_delay_steps[env_ids] = 0
         self.thrust_asymmetry_scale[env_ids] = 1.0
         self.motor_lag_tau_s[env_ids] = 0.0
+        self.velocity_p_gain_delta[env_ids] = 0.0
+        self.velocity_i_gain_delta[env_ids] = 0.0
+        self.velocity_d_gain_delta[env_ids] = 0.0
 
     def sample_envs(self, env_ids: torch.Tensor):
         self.reset_envs(env_ids)
@@ -110,6 +124,19 @@ class VanillaDomainRandomizationState:
         lag_tau = self._sample_uniform(self.cfg.motor_lag_time_constant_s_range, (num_envs,))
         self.motor_lag_tau_s[env_ids] = lag_tau * lag_mask.to(dtype=lag_tau.dtype)
 
+        gain_mask = self._sample_mask(num_envs, self.cfg.velocity_gain_noise_enabled, self.cfg.velocity_gain_noise_probability)
+        self.velocity_gain_noise_active[env_ids] = gain_mask
+        mask = gain_mask.unsqueeze(-1).to(dtype=torch.float32)
+        self.velocity_p_gain_delta[env_ids] = self._sample_gaussian(
+            self.cfg.velocity_p_gain_noise_std, (num_envs, 3)
+        ) * mask
+        self.velocity_i_gain_delta[env_ids] = self._sample_gaussian(
+            self.cfg.velocity_i_gain_noise_std, (num_envs, 3)
+        ) * mask
+        self.velocity_d_gain_delta[env_ids] = self._sample_gaussian(
+            self.cfg.velocity_d_gain_noise_std, (num_envs, 3)
+        ) * mask
+
     def _sample_mask(self, num_envs: int, enabled: bool, probability: float) -> torch.Tensor:
         if not enabled or probability <= 0.0:
             return torch.zeros(num_envs, dtype=torch.bool, device=self.device)
@@ -120,6 +147,10 @@ class VanillaDomainRandomizationState:
     def _sample_uniform(self, value_range: tuple[float, float], shape: tuple[int, ...]) -> torch.Tensor:
         low, high = value_range
         return torch.rand(shape, device=self.device) * (high - low) + low
+
+    def _sample_gaussian(self, std: tuple[float, ...], shape: tuple[int, ...]) -> torch.Tensor:
+        std_tensor = torch.as_tensor(std, device=self.device, dtype=torch.float32)
+        return torch.randn(shape, device=self.device) * std_tensor
 
 
 def get_domain_randomization_state(env) -> VanillaDomainRandomizationState | None:
