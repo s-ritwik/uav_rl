@@ -145,53 +145,60 @@ def _maybe_warmup_ardupilot_takeoff(env, env_cfg):
         f"{target_altitude_m:.1f} m before PPO starts."
     )
 
-    start_time = time.monotonic()
-    last_status_time = 0.0
-    while not action_term.all_envs_ready_for_policy():
-        _, _, terminated, time_outs, _ = env.step(zero_actions)
-        now = time.monotonic()
-        if torch.any(terminated) or torch.any(time_outs):
-            term_manager = getattr(env.unwrapped, "termination_manager", None)
-            term_debug = {}
-            if term_manager is not None:
-                for term_name in term_manager.active_terms:
-                    term_debug[term_name] = bool(torch.any(term_manager.get_term(term_name)).item())
-            raise RuntimeError(
-                "Autopilot warmup reset triggered before policy handoff. "
-                f"terminated={bool(torch.any(terminated).item())} "
-                f"time_outs={bool(torch.any(time_outs).item())} "
-                f"terms={term_debug}"
-            )
-        if now - start_time > warmup_timeout_s:
-            raise RuntimeError(
-                "Autopilot warmup timed out after "
-                f"{warmup_timeout_s:.1f}s with {action_term.num_ready_envs()}/{env.unwrapped.num_envs} envs ready."
-            )
-        if now - last_status_time >= 5.0:
-            altitudes = action_term.current_altitudes()
-            mean_altitude = statistics.mean(altitudes) if altitudes else 0.0
-            extra_status = ""
-            if hasattr(action_term, "debug_statuses"):
-                statuses = action_term.debug_statuses()
-                if statuses:
-                    status0 = statuses[0]
-                    extra_status = (
-                        ", env0 state="
-                        f"{status0.get('takeoff_state')} connected={status0.get('connected')} "
-                        f"gps={status0.get('gps_fix_ready')} pos={status0.get('position_estimate_ready')} "
-                        f"speed={float(status0.get('speed_mps', 0.0)):.2f}"
-                    )
-            print(
-                "[INFO]: Autopilot warmup status: "
-                f"{action_term.num_ready_envs()}/{env.unwrapped.num_envs} ready, "
-                f"mean altitude {mean_altitude:.2f} m{extra_status}"
-            )
-            last_status_time = now
+    if hasattr(action_term, "set_warmup_active"):
+        action_term.set_warmup_active(True)
 
-    # Let the first PPO-side reset keep the live hover state instead of disturbing SITL right after takeoff.
-    if hasattr(action_term, "skip_next_runtime_reset"):
-        action_term.skip_next_runtime_reset()
-    print("[INFO]: Autopilot warmup complete. Starting PPO rollout collection.")
+    try:
+        start_time = time.monotonic()
+        last_status_time = 0.0
+        while not action_term.all_envs_ready_for_policy():
+            _, _, terminated, time_outs, _ = env.step(zero_actions)
+            now = time.monotonic()
+            if torch.any(terminated) or torch.any(time_outs):
+                term_manager = getattr(env.unwrapped, "termination_manager", None)
+                term_debug = {}
+                if term_manager is not None:
+                    for term_name in term_manager.active_terms:
+                        term_debug[term_name] = bool(torch.any(term_manager.get_term(term_name)).item())
+                raise RuntimeError(
+                    "Autopilot warmup reset triggered before policy handoff. "
+                    f"terminated={bool(torch.any(terminated).item())} "
+                    f"time_outs={bool(torch.any(time_outs).item())} "
+                    f"terms={term_debug}"
+                )
+            if now - start_time > warmup_timeout_s:
+                raise RuntimeError(
+                    "Autopilot warmup timed out after "
+                    f"{warmup_timeout_s:.1f}s with {action_term.num_ready_envs()}/{env.unwrapped.num_envs} envs ready."
+                )
+            if now - last_status_time >= 5.0:
+                altitudes = action_term.current_altitudes()
+                mean_altitude = statistics.mean(altitudes) if altitudes else 0.0
+                extra_status = ""
+                if hasattr(action_term, "debug_statuses"):
+                    statuses = action_term.debug_statuses()
+                    if statuses:
+                        status0 = statuses[0]
+                        extra_status = (
+                            ", env0 state="
+                            f"{status0.get('takeoff_state')} connected={status0.get('connected')} "
+                            f"gps={status0.get('gps_fix_ready')} pos={status0.get('position_estimate_ready')} "
+                            f"speed={float(status0.get('speed_mps', 0.0)):.2f}"
+                        )
+                print(
+                    "[INFO]: Autopilot warmup status: "
+                    f"{action_term.num_ready_envs()}/{env.unwrapped.num_envs} ready, "
+                    f"mean altitude {mean_altitude:.2f} m{extra_status}"
+                )
+                last_status_time = now
+
+        # Let the first PPO-side reset keep the live hover state instead of disturbing SITL right after takeoff.
+        if hasattr(action_term, "skip_next_runtime_reset"):
+            action_term.skip_next_runtime_reset()
+        print("[INFO]: Autopilot warmup complete. Starting PPO rollout collection.")
+    finally:
+        if hasattr(action_term, "set_warmup_active"):
+            action_term.set_warmup_active(False)
 
 
 def _stop_ardupilot_runtime(env):

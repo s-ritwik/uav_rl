@@ -8,10 +8,23 @@ from isaaclab.envs import mdp as env_mdp
 from ...vanilla.mdp import terminations as vanilla_terminations
 
 
-def _ready_mask(env) -> torch.Tensor | None:
+def _action_term(env):
     try:
-        action_term = env.action_manager.get_term("control")
+        return env.action_manager.get_term("control")
     except Exception:
+        return None
+
+
+def _warmup_active(env) -> bool:
+    action_term = _action_term(env)
+    if action_term is None or not hasattr(action_term, "warmup_active"):
+        return False
+    return bool(action_term.warmup_active())
+
+
+def _ready_mask(env) -> torch.Tensor | None:
+    action_term = _action_term(env)
+    if action_term is None:
         return None
 
     if not hasattr(action_term, "ready_mask"):
@@ -21,6 +34,8 @@ def _ready_mask(env) -> torch.Tensor | None:
 
 
 def _guard_until_ready(env, terminated: torch.Tensor) -> torch.Tensor:
+    if _warmup_active(env):
+        return torch.zeros_like(terminated, dtype=torch.bool)
     ready_mask = _ready_mask(env)
     if ready_mask is None:
         return terminated
@@ -30,6 +45,9 @@ def _guard_until_ready(env, terminated: torch.Tensor) -> torch.Tensor:
 
 
 def time_out_after_takeoff(env) -> torch.Tensor:
+    if _warmup_active(env):
+        env.episode_length_buf[:] = 0
+        return torch.zeros_like(env.episode_length_buf, dtype=torch.bool)
     ready_mask = _ready_mask(env)
     if ready_mask is not None:
         env.episode_length_buf[~ready_mask] = 0

@@ -94,6 +94,7 @@ class ArduPilotGuidedVelocityAction(ActionTerm):
 
         self._runtime: ArduPilotFineTuneRuntimeState | None = None
         self._skip_next_runtime_reset = False
+        self._warmup_active = False
 
     def __del__(self):
         try:
@@ -149,6 +150,12 @@ class ArduPilotGuidedVelocityAction(ActionTerm):
 
     def skip_next_runtime_reset(self):
         self._skip_next_runtime_reset = True
+
+    def set_warmup_active(self, active: bool):
+        self._warmup_active = bool(active)
+
+    def warmup_active(self) -> bool:
+        return self._warmup_active
 
     def _ensure_runtime(self):
         runtime_cfg = self._env.cfg.runtime_cfg

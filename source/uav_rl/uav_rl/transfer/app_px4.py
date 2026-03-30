@@ -10,7 +10,9 @@ import argparse
 import atexit
 import ast
 import math
+import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,6 +89,46 @@ if args_cli.num_drones < 1:
 
 IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_capsule.usd").resolve())
 PLATFORM_SIZE = (1.0, 1.0, 0.2)
+
+
+def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
+    """Remove orphan PX4 SITL processes for the requested instance before relaunch."""
+
+    px4_binary = str((Path(px4_dir).expanduser() / "build" / "px4_sitl_default" / "bin" / "px4").resolve())
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=", "args="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return
+
+    matching_pids: list[int] = []
+    instance_token = f" -i {int(vehicle_id)} "
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line or px4_binary not in line or instance_token not in f" {line} ":
+            continue
+        try:
+            pid_text, _ = line.split(" ", 1)
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid != os.getpid():
+            matching_pids.append(pid)
+
+    for pid in matching_pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+
+    if matching_pids:
+        time.sleep(0.5)
 
 simulation_app = SimulationApp({"headless": args_cli.headless})
 
@@ -698,6 +740,7 @@ class PegasusApp:
 
     def vehicle_factory(self, vehicle_id: int, gap_x_axis: float):
         config_multirotor = MultirotorConfig()
+        _kill_stale_px4_instance(vehicle_id, self.pg.px4_path)
 
         px4_backend = PX4MavlinkBackend(
             PX4MavlinkBackendConfig(
@@ -794,6 +837,12 @@ class PegasusApp:
                 px4_backend.stop()
             except Exception as exc:
                 carb.log_warn(f"[transfer.app_px4] Failed while stopping PX4 backend: {exc}")
+
+        for vehicle_id in range(args_cli.num_drones):
+            try:
+                _kill_stale_px4_instance(vehicle_id, self.pg.px4_path)
+            except Exception:
+                pass
 
         try:
             self.timeline.stop()

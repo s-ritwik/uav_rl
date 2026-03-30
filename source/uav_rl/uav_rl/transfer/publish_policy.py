@@ -13,6 +13,10 @@ def _default_log_root() -> str:
     return str((Path(__file__).resolve().parents[4] / "logs" / "rsl_rl" / "vanilla").resolve())
 
 
+def _default_plot_dir() -> str:
+    return str((Path(__file__).resolve().parents[4] / "logs" / "transfer" / "plots").resolve())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ROS 2 node that runs a vanilla policy and publishes cmd_vel.")
     parser.add_argument("--namespace", type=str, default="transfer", help="ROS namespace prefix, e.g. 'transfer'.")
@@ -30,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--velocity-limit-z", type=float, default=1.0)
     parser.add_argument("--yaw-rate-limit", type=float, default=3.0)
     parser.add_argument("--debug-every", type=int, default=0, help="Print action debug every N policy steps.")
+    parser.add_argument("--plot", action="store_true", help="Save a 3-panel platform x/y/z motion plot on shutdown.")
+    parser.add_argument(
+        "--plot-dir",
+        type=str,
+        default=_default_plot_dir(),
+        help="Directory where the platform motion plot is saved when --plot is enabled.",
+    )
     return parser
 
 
@@ -173,6 +184,9 @@ def _run(args) -> None:
             self.last_policy_time = 0.0
             self.policy_period = 1.0 / max(args.policy_rate_hz, 1.0)
             self._warned_unready = False
+            self._plot_start_time = time.monotonic()
+            self._platform_plot_t: list[float] = []
+            self._platform_plot_xyz: list[np.ndarray] = []
 
         def _pose_callback(self, msg: PoseStamped):
             self.robot_pos = np.array(
@@ -211,6 +225,9 @@ def _run(args) -> None:
                 ],
                 dtype=np.float32,
             )
+            if args.plot:
+                self._platform_plot_t.append(time.monotonic() - self._plot_start_time)
+                self._platform_plot_xyz.append(self.platform_pos.copy())
 
         def _platform_twist_callback(self, msg: TwistStamped):
             self.platform_lin_vel_w = np.array(
@@ -304,7 +321,46 @@ def _run(args) -> None:
                 pass
             finally:
                 self._publish_cmd(np.zeros((3,), dtype=np.float32), 0.0)
+                self._save_platform_plot()
                 self.node.destroy_node()
+
+        def _save_platform_plot(self):
+            if not args.plot:
+                return
+
+            if not self._platform_plot_t or not self._platform_plot_xyz:
+                self.node.get_logger().warning("Plot requested, but no platform pose samples were recorded.")
+                return
+
+            try:
+                import matplotlib
+
+                matplotlib.use("Agg")
+                import matplotlib.pyplot as plt
+            except Exception as exc:
+                self.node.get_logger().warning(f"Failed to import matplotlib for plotting: {exc}")
+                return
+
+            samples = np.asarray(self._platform_plot_xyz, dtype=np.float32)
+            times = np.asarray(self._platform_plot_t, dtype=np.float32)
+            plot_dir = Path(args.plot_dir).expanduser().resolve()
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            plot_path = plot_dir / f"platform_motion_vehicle{args.vehicle_id}_{timestamp}.png"
+
+            fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+            labels = ("x", "y", "z")
+            units = ("m", "m", "m")
+            for axis_index, axis in enumerate(axes):
+                axis.plot(times, samples[:, axis_index], linewidth=1.5)
+                axis.set_ylabel(f"{labels[axis_index]} [{units[axis_index]}]")
+                axis.grid(True, alpha=0.3)
+            axes[0].set_title(f"Platform Motion: vehicle {args.vehicle_id}")
+            axes[-1].set_xlabel("time [s]")
+            fig.tight_layout()
+            fig.savefig(plot_path, dpi=150)
+            plt.close(fig)
+            self.node.get_logger().info(f"Saved platform motion plot to: {plot_path}")
 
     try:
         PolicyPublisher().run()

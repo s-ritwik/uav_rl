@@ -1,18 +1,20 @@
 # UAV RL
 
-This repo is where I am building a training stack for UAVs for different purposes, starting with stable manager-based RL tasks in Isaac Lab and expanding from there.
+This repository contains a manager-based UAV RL stack built on Isaac Lab. The current focus is reproducible quadrotor training, evaluation, and transfer using an Iris vehicle model.
 
 ## Overview
 
-`uav_rl` is centered on one thing right now: getting strong task definitions and a repeatable train/eval loop for quadrotor control.
+`uav_rl` is centered on a clear workflow for quadrotor policy development:
+
+- high-throughput pretraining with a PX4-like controller inside Isaac Lab
+- low-throughput SITL fine-tuning with PX4
+- transfer tooling for policy playback against external flight stacks
 
 Current focus:
 
-- Manager-based UAV tasks in Isaac Lab.
-- PX4-like velocity-control action pipeline on an Iris quadrotor asset.
-- Fast iteration with RSL-RL training and checkpoint playback.
-
-Transfer workflows are not the priority yet, so this README keeps that part intentionally brief.
+- Manager-based UAV tasks in Isaac Lab
+- PX4-like velocity-control action pipeline on an Iris quadrotor asset
+- RSL-RL training, checkpoint playback, and transfer app tooling
 
 ## Installation
 
@@ -69,13 +71,56 @@ python scripts/zero_agent.py --task vanilla --headless
 python scripts/random_agent.py --task vanilla --headless
 ```
 
+## Recommended Workflow
+
+This repository is intended to be used in two stages.
+
+1. Pretrain with `vanilla`
+
+- Use the `vanilla` task for high-throughput policy training.
+- This task uses the in-repo PX4-like controller, not full SITL.
+- Recommended scale is about `4096` environments for fast policy iteration.
+
+Example:
+
+```bash
+python scripts/rsl_rl/train.py --task vanilla --num_envs 4096 --headless
+```
+
+2. Fine-tune with PX4 SITL
+
+- Start from a pretrained `vanilla` checkpoint.
+- Fine-tune with `finetune_px4` using far fewer environments.
+- Recommended scale is `4-8` environments.
+
+Example:
+
+```bash
+python scripts/rsl_rl/train.py \
+  --task finetune_px4 \
+  --num_envs 4 \
+  --headless \
+  --resume \
+  --load_run <vanilla_run_dir> \
+  --checkpoint <checkpoint.pt>
+```
+
+This is the intended path for new policies:
+
+- pretrain with `vanilla`
+- validate with `play.py`
+- fine-tune with `finetune_px4`
+- deploy with `transfer/app_px4.py` and `transfer/publish_policy.py`
+
 ## RL Tasks
 
 RL Task list:
 
-| Task          |   Robot    |   Hardware Tested?   | Description                                                      |
-|---------------|:----------:|:--------------------:|------------------------------------------------------------------|
-| `vanilla` |     IRIS     |  ❌  | Basic UAV Hover policy, to understand the env cfg |
+| Task | Robot | Hardware Tested? | Description |
+|------|:-----:|:----------------:|-------------|
+| `vanilla` | IRIS | ❌ | High-throughput training task using the in-repo PX4-like controller |
+| `finetune_px4` | IRIS | ❌ | PX4 SITL fine-tuning task intended for `4-8` envs |
+| `finetune_ardu` | IRIS | ❌ | ArduPilot SITL fine-tuning task. Experimental and not yet reliable |
 
 ## Task Channel Breakdown (`vanilla`)
 
@@ -215,9 +260,53 @@ RSL-RL runs are saved under:
 logs/rsl_rl/vanilla/<timestamp>_<optional_run_name>/
 ```
 
-## Transfer (Current Status)
+## Transfer
 
-Transfer is intentionally light in this repo right now. The current stage is task and policy training maturity first; transfer docs and tooling will follow once the task channel is stable.
+Transfer tooling is available under `source/uav_rl/uav_rl/transfer`.
+
+Main entry points:
+
+- `source/uav_rl/uav_rl/transfer/app_px4.py`
+- `source/uav_rl/uav_rl/transfer/app_ardu.py`
+- `source/uav_rl/uav_rl/transfer/publish_policy.py`
+
+Typical PX4 transfer flow:
+
+1. Launch the PX4 transfer app
+2. Wait for automatic takeoff and hover handoff
+3. Start `publish_policy.py`
+4. Publish policy velocity commands to the transfer topics
+
+Example:
+
+```bash
+python source/uav_rl/uav_rl/transfer/app_px4.py --num_drones 1 --namespace transfer
+python source/uav_rl/uav_rl/transfer/publish_policy.py \
+  --namespace transfer \
+  --vehicle-id 0 \
+  --policy-jit <path/to/exported/policy.pt>
+```
+
+## SITL Status
+
+PX4:
+
+- `finetune_px4` is the recommended fine-tuning path.
+- PX4 transfer and SITL fine-tuning are stable enough for regular use.
+- Runtime issues can still occur, especially around startup, heartbeats, or simulator timing, but the PX4 path is the maintained path.
+
+ArduPilot:
+
+- `finetune_ardu` and `app_ardu.py` are available.
+- ArduPilot support is highly beta.
+- Expect transport issues, startup failures, reset problems, and controller mismatches.
+- Use it only if you are explicitly working on the ArduPilot path.
+
+In practice:
+
+- use `vanilla` for pretraining
+- use `finetune_px4` for SITL fine-tuning
+- treat ArduPilot support as experimental
 
 ## Code Formatting
 
