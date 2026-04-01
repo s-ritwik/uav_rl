@@ -6,6 +6,7 @@ from ..vanilla.vanilla_post_init_cfg import (
     VanillaPlatformMotionCfg,
     VanillaPlatformPlacementCfg,
     VanillaPostInitCfg,
+    VanillaRewardWeightsCfg,
     VanillaResetPoseRangeCfg,
     VanillaResetSpawnCfg,
     VanillaResetVelocityRangeCfg,
@@ -28,6 +29,7 @@ class PX4FineTunePostInitCfg(VanillaPostInitCfg):
     """Task tuning for PX4 SITL fine-tuning."""
 
     scene: VanillaSceneLayoutCfg = VanillaSceneLayoutCfg(env_spacing=20.0)
+    reward_weights: VanillaRewardWeightsCfg = VanillaRewardWeightsCfg()
     reset_spawn: VanillaResetSpawnCfg = VanillaResetSpawnCfg(
         pose_range=VanillaResetPoseRangeCfg(
             x=(0.0, 0.0),

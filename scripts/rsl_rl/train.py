@@ -77,9 +77,11 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 
 import logging
 import os
+import re
 import statistics
 import time
 from datetime import datetime
+from pathlib import Path
 
 import gymnasium as gym
 import torch
@@ -110,6 +112,99 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+
+def _resolve_resume_path(log_root_path: str, load_run: str | None, load_checkpoint: str | None) -> str:
+    """Resolve a checkpoint path with support for absolute paths and cross-experiment loading.
+
+    IsaacLab's default helper resolves checkpoints under:
+        <log_root_path>/<load_run>/<load_checkpoint>
+
+    For transfer learning, we also support:
+    - Passing a direct file path via --checkpoint
+    - Passing a run directory path via --load_run, optionally with --checkpoint
+    """
+
+    # 1) Direct checkpoint file path.
+    if load_checkpoint:
+        ckpt_path = Path(load_checkpoint).expanduser()
+        if not ckpt_path.is_absolute():
+            ckpt_path = (Path.cwd() / ckpt_path)
+        if ckpt_path.is_file():
+            return str(ckpt_path.resolve())
+
+    # 2) Direct run directory path.
+    if load_run:
+        run_path = Path(load_run).expanduser()
+        if not run_path.is_absolute():
+            run_path = (Path.cwd() / run_path)
+        if run_path.is_dir():
+            # If a checkpoint filename was provided, prefer it.
+            if load_checkpoint:
+                candidate = run_path / load_checkpoint
+                if candidate.is_file():
+                    return str(candidate.resolve())
+            # Otherwise, emulate get_checkpoint_path() behavior within the run directory.
+            pattern = re.compile(load_checkpoint or r".*")
+            candidates = [p.name for p in run_path.iterdir() if p.is_file() and pattern.match(p.name)]
+            if not candidates:
+                raise ValueError(f"No checkpoints in the directory: '{str(run_path)}' match '{load_checkpoint}'.")
+            candidates.sort(key=lambda m: f"{m:0>15}")
+            return str((run_path / candidates[-1]).resolve())
+
+    # 3) Default: resolve under this experiment's log root.
+    return get_checkpoint_path(log_root_path, load_run or ".*", load_checkpoint or ".*")
+
+
+def _maybe_convert_scalar_std_checkpoint_to_log_std(checkpoint_path: str) -> str:
+    """Convert older scalar-std checkpoints to log-std checkpoints for RSL-RL ActorCritic.
+
+    Some checkpoints store an unconstrained `std` parameter (which can go negative).
+    Newer configs can use `noise_std_type="log"` which stores `log_std` and ensures `std=exp(log_std) > 0`.
+
+    This shim allows loading scalar-std checkpoints into log-std policies by rewriting the checkpoint
+    to a temporary file.
+    """
+
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        return checkpoint_path
+
+    try:
+        ckpt = torch.load(str(path), map_location="cpu")
+    except Exception:
+        return checkpoint_path
+
+    if not isinstance(ckpt, dict):
+        return checkpoint_path
+
+    msd = ckpt.get("model_state_dict")
+    if not isinstance(msd, dict):
+        return checkpoint_path
+
+    # Only convert the canonical key used by rsl_rl.modules.ActorCritic.
+    if "std" not in msd or "log_std" in msd:
+        return checkpoint_path
+
+    std = msd.get("std")
+    if not torch.is_tensor(std):
+        try:
+            std = torch.as_tensor(std)
+        except Exception:
+            return checkpoint_path
+
+    # Prevent log(0) and keep numerical stability.
+    log_std = torch.log(std.to(dtype=torch.float32).clamp_min(1.0e-6))
+    msd = dict(msd)
+    msd.pop("std", None)
+    msd["log_std"] = log_std
+    ckpt = dict(ckpt)
+    ckpt["model_state_dict"] = msd
+
+    tmp_path = Path("/tmp") / f"{path.stem}_logstd_{time.time_ns()}{path.suffix}"
+    torch.save(ckpt, str(tmp_path))
+    print(f"[INFO]: Converted checkpoint scalar std -> log_std: {path} -> {tmp_path}")
+    return str(tmp_path)
 
 
 def _maybe_warmup_ardupilot_takeoff(env, env_cfg):
@@ -288,7 +383,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         # save resume path before creating a new log_dir
         if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+            resume_path = _resolve_resume_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+            resume_path = _maybe_convert_scalar_std_checkpoint_to_log_std(resume_path)
 
         # wrap for video recording
         if args_cli.video:
