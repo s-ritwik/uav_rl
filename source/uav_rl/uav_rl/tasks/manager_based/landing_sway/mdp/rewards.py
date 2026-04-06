@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 def failure_termination_penalty(
     env: "ManagerBasedRLEnv",
     penalty: float = -10.0,
-    failure_term_names: tuple[str, ...] = ("capsule_contact", "crash_low", "crash_high", "out_of_bounds"),
+    failure_term_names: tuple[str, ...] = ("time_out", "capsule_contact", "crash_low", "crash_high", "out_of_bounds"),
 ) -> torch.Tensor:
     """Apply a fixed penalty only for selected failure terminations.
 
@@ -75,30 +75,18 @@ def position_error_l2(
     return torch.sum(torch.square(pos_rel - target), dim=1)
 
 
-def position_error_tanh(
+def horizontal_position_error_tanh(
     env: "ManagerBasedRLEnv",
-    target_pos: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    target_xy: tuple[float, float] = (0.0, 0.0),
     std: float = 0.6,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
 ) -> torch.Tensor:
-    """Positive hover reward in [0, 1], larger when closer to the platform-frame target."""
-    pos_rel = _relative_position(env, asset_cfg, reference_asset_cfg)
-    target = _target_tensor(env, target_pos, pos_rel.dtype)
-    distance = torch.linalg.norm(pos_rel - target, dim=1)
-    return 1.0 - torch.tanh(distance / max(std, 1.0e-3))
-
-
-def horizontal_position_error_l2(
-    env: "ManagerBasedRLEnv",
-    target_xy: tuple[float, float] = (0.0, 0.0),
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
-) -> torch.Tensor:
-    """Reward to follow the platform center in the horizontal plane."""
+    """Positive XY tracking reward in [0, 1], larger when closer to platform XY target."""
     pos_rel = _relative_position(env, asset_cfg, reference_asset_cfg)
     target = _target_tensor(env, target_xy, pos_rel.dtype)
-    return torch.sum(torch.square(pos_rel[:, :2] - target), dim=1)
+    distance_xy = torch.linalg.norm(pos_rel[:, :2] - target, dim=1)
+    return 1.0 - torch.tanh(distance_xy / max(std, 1.0e-3))
 
 
 def vertical_position_error_l1(

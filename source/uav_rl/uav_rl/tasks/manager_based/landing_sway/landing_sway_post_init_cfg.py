@@ -17,16 +17,16 @@ class LandingSwayRewardWeightsCfg:
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
     # mdp.failure_termination_penalty: scales failure penalty value (usually keep at 1.0).
-    terminated: float = 1.0
+    terminated: float = 15.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination (usually 0.0).
     touchdown_terminated: float = 0.0
-    # mdp.position_error_tanh wrt platform-frame target [0, 0, 1.0].
-    position_track: float = 0.0 #2.5
+    # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
+    position_track: float = 100
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
     # pushes agent to land
-    vertical_clearance_excess: float = -1.0
+    vertical_clearance_excess: float = 0#-1.0
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
@@ -48,15 +48,15 @@ class LandingSwayTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.25
+    max_touchdown_speed_mps: float = 0.4
     # XY-center tolerance used only when require_xy_within_box=True.
-    max_xy_error_m: float = 0.20
+    max_xy_error_m: float = 0.40
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = False
     # Reward value applied on good touchdown event.
-    good_touchdown_reward: float = 5.0
+    good_touchdown_reward: float = 3000.0
     # Reward value applied on bad touchdown event.
-    bad_touchdown_reward: float = -2.0
+    bad_touchdown_reward: float = -50.0
 
 
 @configclass
@@ -74,7 +74,7 @@ class LandingSwayTerminationPenaltyCfg:
     # Penalty value used by mdp.failure_termination_penalty for matched failure terms.
     failure_penalty: float = -10.0
     # Termination term names considered as failures (touchdown intentionally excluded).
-    failure_term_names: tuple[str, ...] = ("capsule_contact", "crash_low", "crash_high", "out_of_bounds")
+    failure_term_names: tuple[str, ...] = ("time_out", "capsule_contact", "crash_low", "crash_high", "out_of_bounds")
 
 
 @configclass

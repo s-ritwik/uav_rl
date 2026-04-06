@@ -168,7 +168,7 @@ class RewardsCfg:
         weight=1.0,
         params={
             "penalty": -10.0,
-            "failure_term_names": ("capsule_contact", "crash_low", "crash_high", "out_of_bounds"),
+            "failure_term_names": ("time_out", "capsule_contact", "crash_low", "crash_high", "out_of_bounds"),
         },
     )
     touchdown_terminated = RewTerm(
@@ -177,26 +177,17 @@ class RewardsCfg:
         params={"touchdown_term_name": "touchdown"},
     )
 
-    # Track target hover setpoint in platform frame: (x, y, z) = (0, 0, 1.0).
+    # Track target hover setpoint in platform frame XY: (x, y) = (0, 0).
     position_track = RewTerm(
-        func=mdp.position_error_tanh,
+        func=mdp.horizontal_position_error_tanh,
         weight=2.5,
         params={
-            "target_pos": (0.0, 0.0, 1.0),
+            "target_xy": (0.0, 0.0),
             "std": 0.25,
             "asset_cfg": SceneEntityCfg("robot"),
             "reference_asset_cfg": SceneEntityCfg("platform"),
         },
     )
-    # horizontal_position = RewTerm(
-    #     func=mdp.horizontal_position_error_l2,
-    #     weight=-1.5,
-    #     params={
-    #         "target_xy": (0.0, 0.0),
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #         "reference_asset_cfg": SceneEntityCfg("platform"),
-    #     },
-    # )
     vertical_position = RewTerm(
         func=mdp.vertical_position_error_l1,
         weight=-2.0,
