@@ -17,7 +17,7 @@ class LandingSwayRewardWeightsCfg:
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
     # mdp.failure_termination_penalty: scales failure penalty value (usually keep at 1.0).
-    terminated: float = 15.0
+    terminated: float = 20.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination (usually 0.0).
     touchdown_terminated: float = 0.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
@@ -34,9 +34,9 @@ class LandingSwayRewardWeightsCfg:
     # mdp.angular_rate_l2: penalize body angular rates.
     angular_rate: float = -0.05
     # mdp.yaw_error_l2: penalize yaw error to target yaw.
-    yaw_error: float = -1.0
+    yaw_error: float = -50.0
     # mdp.flat_orientation_l2: penalize tilt from upright.
-    upright: float = -2.0
+    upright: float = -100.0
     # mdp.touchdown_quality_reward multiplier. Keep 1.0 when using explicit good/bad touchdown values below.
     touchdown_quality: float = 1.0
 
@@ -48,13 +48,13 @@ class LandingSwayTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.4
+    max_touchdown_speed_mps: float = 0.2
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.40
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
-    require_xy_within_box: bool = False
+    require_xy_within_box: bool = True
     # Reward value applied on good touchdown event.
-    good_touchdown_reward: float = 3000.0
+    good_touchdown_reward: float = 10000.0
     # Reward value applied on bad touchdown event.
     bad_touchdown_reward: float = -50.0
 
@@ -74,15 +74,17 @@ class LandingSwayTerminationPenaltyCfg:
     # Penalty value used by mdp.failure_termination_penalty for matched failure terms.
     failure_penalty: float = -10.0
     # Termination term names considered as failures (touchdown intentionally excluded).
-    failure_term_names: tuple[str, ...] = ("time_out", "capsule_contact", "crash_low", "crash_high", "out_of_bounds")
+    failure_term_names: tuple[str, ...] = ("time_out", "attitude_tilt", "crash_low", "crash_high", "out_of_bounds")
 
 
 @configclass
 class LandingSwayTerminationThresholdsCfg:
     """Thresholds for termination terms (not weights)."""
 
-    # contact_forces threshold for capsule_contact termination.
-    capsule_contact_threshold_n: float = 1.0
+    # absolute roll angle above this -> attitude_tilt.
+    attitude_tilt_max_roll_deg: float = 30.0
+    # absolute pitch angle above this -> attitude_tilt.
+    attitude_tilt_max_pitch_deg: float = 30.0
     # root height below this -> crash_low.
     crash_low_min_height_m: float = -2.0
     # root height above this -> crash_high.
@@ -314,7 +316,12 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.touchdown_quality.params["bad_touchdown_reward"] = float(self.touchdown.bad_touchdown_reward)
         env_cfg.terminations.touchdown.params["threshold"] = float(self.touchdown.force_threshold_n)
 
-        env_cfg.terminations.capsule_contact.params["threshold"] = float(self.termination_thresholds.capsule_contact_threshold_n)
+        env_cfg.terminations.attitude_tilt.params["maximum_roll_deg"] = float(
+            self.termination_thresholds.attitude_tilt_max_roll_deg
+        )
+        env_cfg.terminations.attitude_tilt.params["maximum_pitch_deg"] = float(
+            self.termination_thresholds.attitude_tilt_max_pitch_deg
+        )
         env_cfg.terminations.crash_low.params["minimum_height"] = float(self.termination_thresholds.crash_low_min_height_m)
         env_cfg.terminations.crash_high.params["maximum_height"] = float(self.termination_thresholds.crash_high_max_height_m)
         env_cfg.terminations.out_of_bounds.params["max_distance"] = float(self.termination_thresholds.out_of_bounds_max_distance_m)

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 def failure_termination_penalty(
     env: "ManagerBasedRLEnv",
     penalty: float = -10.0,
-    failure_term_names: tuple[str, ...] = ("time_out", "capsule_contact", "crash_low", "crash_high", "out_of_bounds"),
+    failure_term_names: tuple[str, ...] = ("time_out", "attitude_tilt", "crash_low", "crash_high", "out_of_bounds"),
 ) -> torch.Tensor:
     """Apply a fixed penalty only for selected failure terminations.
 

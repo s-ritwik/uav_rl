@@ -2,6 +2,9 @@
 
 This repository contains a manager-based UAV RL stack built on Isaac Lab. The current focus is reproducible quadrotor training, evaluation, and transfer using an Iris vehicle model.
 
+Pegasus Simulator is required for the PX4 and transfer workflows:
+https://pegasussimulator.github.io/PegasusSimulator/source/setup/installation.html
+
 ## Overview
 
 `uav_rl` is centered on a clear workflow for quadrotor policy development:
@@ -27,16 +30,19 @@ git lfs install
 2. Install Isaac Lab by following the official guide:
    https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html
 
-3. Clone this repo outside your Isaac Lab directory.
+3. Install and configure Pegasus Simulator, including the environment variables used by the transfer stack:
+   https://pegasussimulator.github.io/PegasusSimulator/source/setup/installation.html
 
-4. Install this package in editable mode:
+4. Clone this repo outside your Isaac Lab directory.
+
+5. Install this package in editable mode:
 
 ```bash
 # use 'PATH_TO_isaaclab.sh|bat -p' if Isaac Lab is not in your active python env
 python -m pip install -e source/uav_rl
 ```
 
-5. Quick sanity check:
+6. Quick sanity check:
 
 ```bash
 python scripts/list_envs.py
@@ -280,12 +286,14 @@ Typical PX4 transfer flow:
 Example:
 
 ```bash
-python source/uav_rl/uav_rl/transfer/app_px4.py --num_drones 1 --namespace transfer
-python source/uav_rl/uav_rl/transfer/publish_policy.py \
+isaac_run python source/uav_rl/uav_rl/transfer/app_px4.py --num_drones 1 --namespace transfer
+isaac_run python source/uav_rl/uav_rl/transfer/publish_policy.py \
   --namespace transfer \
   --vehicle-id 0 \
   --policy-jit <path/to/exported/policy.pt>
 ```
+
+These transfer entry points are expected to run through `isaac_run`, not plain `python3`, because they depend on the Pegasus/Isaac runtime environment and the shell setup documented in the Pegasus installation guide above.
 
 ## SITL Status
 

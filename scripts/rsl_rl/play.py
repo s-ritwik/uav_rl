@@ -46,6 +46,18 @@ parser.add_argument(
     default=50,
     help="Number of simulation steps between debug action prints.",
 )
+parser.add_argument(
+    "--termination_stats",
+    action="store_true",
+    default=False,
+    help="Print termination-cause percentages during deterministic play.",
+)
+parser.add_argument(
+    "--termination_stats_interval",
+    type=int,
+    default=250,
+    help="Number of play steps between termination-stat prints.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -190,6 +202,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obs = env.get_observations()
     timestep = 0
     debug_term_missing_warned = False
+    termination_counts: dict[str, int] = {}
+    termination_total = 0
+
+    def update_termination_stats() -> None:
+        nonlocal termination_total
+        term_manager = getattr(env.unwrapped, "termination_manager", None)
+        if term_manager is None:
+            return
+        for term_name in term_manager.active_terms:
+            term = term_manager.get_term(term_name)
+            count = int(term.to(dtype=torch.bool).sum().item())
+            if count > 0:
+                termination_counts[term_name] = termination_counts.get(term_name, 0) + count
+                termination_total += count
+
+    def print_termination_stats(prefix: str) -> None:
+        if termination_total <= 0:
+            print(f"{prefix} termination_stats: no terminations yet")
+            return
+        parts = []
+        for term_name, count in sorted(termination_counts.items()):
+            percent = 100.0 * count / termination_total
+            parts.append(f"{term_name}={count} ({percent:.2f}%)")
+        print(f"{prefix} termination_stats total={termination_total}: " + ", ".join(parts))
+
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -199,10 +236,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = policy(obs)
             # env stepping
             obs, _, dones, _ = env.step(actions)
+            if args_cli.termination_stats:
+                update_termination_stats()
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
 
         timestep += 1
+        if (
+            args_cli.termination_stats
+            and timestep % max(1, args_cli.termination_stats_interval) == 0
+        ):
+            print_termination_stats(f"[TERMINATION_STATS step={timestep}]")
+
         if args_cli.debug_actions and timestep % max(1, args_cli.debug_action_interval) == 0:
             try:
                 control_term = env.unwrapped.action_manager.get_term("control")
@@ -229,6 +274,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         sleep_time = dt - (time.time() - start_time)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
+
+    if args_cli.termination_stats:
+        print_termination_stats("[TERMINATION_STATS final]")
 
     # close the simulator
     env.close()

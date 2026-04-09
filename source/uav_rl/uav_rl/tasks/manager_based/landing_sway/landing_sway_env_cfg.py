@@ -168,7 +168,7 @@ class RewardsCfg:
         weight=1.0,
         params={
             "penalty": -10.0,
-            "failure_term_names": ("time_out", "capsule_contact", "crash_low", "crash_high", "out_of_bounds"),
+            "failure_term_names": ("time_out", "attitude_tilt", "crash_low", "crash_high", "out_of_bounds"),
         },
     )
     touchdown_terminated = RewTerm(
@@ -250,12 +250,12 @@ class TerminationsCfg:
     """Termination terms."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    capsule_contact = DoneTerm(
-        func=mdp.illegal_contact_with_debug,
+    attitude_tilt = DoneTerm(
+        func=mdp.root_roll_pitch_above_maximum,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),
-            "threshold": 1.0,
-            "print_every_steps": 1,
+            "maximum_roll_deg": 35.0,
+            "maximum_pitch_deg": 35.0,
+            "asset_cfg": SceneEntityCfg("robot"),
         },
     )
     touchdown = DoneTerm(
@@ -295,7 +295,8 @@ class LandingSwayEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.robot.spawn.activate_contact_sensors = True
 
         self.viewer.eye = (8.0, 8.0, 6.0)
-        self.viewer.lookat = (0.0, 0.0, 1.0)
+        self.viewer.lookat = (-2.0, -2.0, 1.0)
+        self.viewer.resolution = (1920, 1080)
 
         self.sim.dt = 1.0 / 250.0
         self.sim.render_interval = 4
