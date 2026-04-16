@@ -33,7 +33,11 @@ class LandingSwayVelocityActionCfg(ActionTermCfg):
     action_scale: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
     action_offset: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     velocity_limits: tuple[float, float, float] = (3.0, 3.0, 2.0)
+    velocity_lower_limits: tuple[float, float, float] | None = None
+    velocity_upper_limits: tuple[float, float, float] | None = None
     yaw_rate_limit: float = 2.5
+    yaw_rate_lower_limit: float | None = None
+    yaw_rate_upper_limit: float | None = None
 
     # Controller parameters (Pegasus example 12 defaults).
     mass: float = 1.5
@@ -113,7 +117,20 @@ class LandingSwayVelocityAction(ActionTerm):
 
         self._action_scale = torch.tensor(self.cfg.action_scale, device=self.device).unsqueeze(0)
         self._action_offset = torch.tensor(self.cfg.action_offset, device=self.device).unsqueeze(0)
-        self._velocity_limits = torch.tensor(self.cfg.velocity_limits, device=self.device)
+        self._velocity_lower_limits = torch.tensor(
+            self.cfg.velocity_lower_limits if self.cfg.velocity_lower_limits is not None else tuple(-v for v in self.cfg.velocity_limits),
+            device=self.device,
+        )
+        self._velocity_upper_limits = torch.tensor(
+            self.cfg.velocity_upper_limits if self.cfg.velocity_upper_limits is not None else self.cfg.velocity_limits,
+            device=self.device,
+        )
+        self._yaw_rate_lower_limit = float(
+            self.cfg.yaw_rate_lower_limit if self.cfg.yaw_rate_lower_limit is not None else -self.cfg.yaw_rate_limit
+        )
+        self._yaw_rate_upper_limit = float(
+            self.cfg.yaw_rate_upper_limit if self.cfg.yaw_rate_upper_limit is not None else self.cfg.yaw_rate_limit
+        )
         self._rotor_direction = torch.tensor(self.cfg.rot_dir, device=self.device, dtype=self._raw_actions.dtype).unsqueeze(0)
         self._rotor_visual_joint_vel = torch.zeros((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
         self._thrust_asymmetry_scale = torch.ones((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
@@ -217,8 +234,10 @@ class LandingSwayVelocityAction(ActionTerm):
         delayed_actions = self._action_delay_buffer.compute(actions)
 
         processed = delayed_actions * self._action_scale + self._action_offset
-        processed[:, :3] = torch.clamp(processed[:, :3], min=-self._velocity_limits, max=self._velocity_limits)
-        processed[:, 3] = torch.clamp(processed[:, 3], min=-self.cfg.yaw_rate_limit, max=self.cfg.yaw_rate_limit)
+        processed[:, :3] = torch.clamp(
+            processed[:, :3], min=self._velocity_lower_limits, max=self._velocity_upper_limits
+        )
+        processed[:, 3] = torch.clamp(processed[:, 3], min=self._yaw_rate_lower_limit, max=self._yaw_rate_upper_limit)
 
         self._processed_actions[:] = processed
         self._velocity_sp[:] = processed[:, :3]

@@ -108,16 +108,14 @@ def vertical_clearance_excess_l1(
     """Linear penalty for being too high above platform clearance.
 
     This uses the same clearance definition as observation `root_pos_rel.z`:
-    z_clearance = rel_z_in_platform_frame - z0.
+    z_clearance = rel_z_in_world - z0.
     """
 
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
     rel_pos_w = asset.data.root_pos_w - reference_asset.data.root_pos_w
-    rel_pos_b = math_utils.quat_apply_inverse(reference_asset.data.root_quat_w, rel_pos_w)
-
     z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.053))
-    z_clearance = rel_pos_b[:, 2] - z0_m
+    z_clearance = rel_pos_w[:, 2] - z0_m
     return torch.clamp(z_clearance - float(clearance_threshold_m), min=0.0)
 
 
@@ -160,6 +158,7 @@ def touchdown_quality_reward(
     touchdown_force_threshold: float = 2.0,
     good_touchdown_reward: float = 4.0,
     bad_touchdown_reward: float = -5.0,
+    center_proximity_bonus: float = 0.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="body"),
@@ -169,6 +168,8 @@ def touchdown_quality_reward(
     Positive reward if, at touchdown onset (contact force crosses threshold):
     - descent speed is <= max_touchdown_speed_mps, and
     - drone root is within max_xy_error_m of platform center in XY.
+    Good touchdowns can also receive an extra shaped bonus that increases as the
+    XY touchdown point approaches the platform center.
     Otherwise a negative reward is issued.
     """
 
@@ -196,9 +197,17 @@ def touchdown_quality_reward(
         good = speed_ok & (xy_error <= float(max_xy_error_m))
     else:
         good = speed_ok
+
+    good_reward = torch.full_like(pre_rel_vz, float(good_touchdown_reward))
+    if float(center_proximity_bonus) != 0.0:
+        xy_radius = max(float(max_xy_error_m), 1.0e-6)
+        closeness = (1.0 - xy_error / xy_radius).clamp(0.0, 1.0)
+        # Add an extra touchdown bonus that peaks at the exact platform center.
+        good_reward = good_reward + float(center_proximity_bonus) * closeness
+
     reward[just_touched] = torch.where(
         good[just_touched],
-        torch.full_like(pre_rel_vz[just_touched], float(good_touchdown_reward)),
+        good_reward[just_touched],
         torch.full_like(pre_rel_vz[just_touched], float(bad_touchdown_reward)),
     )
     return reward

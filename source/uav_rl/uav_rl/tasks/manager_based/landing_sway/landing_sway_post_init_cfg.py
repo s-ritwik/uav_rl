@@ -17,7 +17,7 @@ class LandingSwayRewardWeightsCfg:
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
     # mdp.failure_termination_penalty: scales failure penalty value (usually keep at 1.0).
-    terminated: float = 20.0
+    terminated: float = 100.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination (usually 0.0).
     touchdown_terminated: float = 0.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
@@ -50,13 +50,15 @@ class LandingSwayTouchdownCfg:
     # Good touchdown if descent_speed <= this value.
     max_touchdown_speed_mps: float = 0.2
     # XY-center tolerance used only when require_xy_within_box=True.
-    max_xy_error_m: float = 0.40
+    max_xy_error_m: float = 0.35
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
     # Reward value applied on good touchdown event.
-    good_touchdown_reward: float = 10000.0
+    good_touchdown_reward: float = 40000.0
     # Reward value applied on bad touchdown event.
-    bad_touchdown_reward: float = -50.0
+    bad_touchdown_reward: float = -500.0
+    # Extra shaped bonus on good touchdowns that increases as XY touchdown error approaches zero.
+    center_proximity_bonus: float = 10000.0
 
 
 @configclass
@@ -72,7 +74,7 @@ class LandingSwayTerminationPenaltyCfg:
     """Penalty applied for selected failure termination terms."""
 
     # Penalty value used by mdp.failure_termination_penalty for matched failure terms.
-    failure_penalty: float = -10.0
+    failure_penalty: float = -40.0
     # Termination term names considered as failures (touchdown intentionally excluded).
     failure_term_names: tuple[str, ...] = ("time_out", "attitude_tilt", "crash_low", "crash_high", "out_of_bounds")
 
@@ -101,12 +103,28 @@ class LandingSwaySceneLayoutCfg:
 
 
 @configclass
+class LandingSwayActionCommandLimitsCfg:
+    """Policy command limits applied before controller execution."""
+
+    # Explicit lower clipping limits for commanded vx, vy, vz in m/s.
+    velocity_lower_limits: tuple[float, float, float] = (-0.8, -0.8, -0.8)
+    # Explicit upper clipping limits for commanded vx, vy, vz in m/s.
+    velocity_upper_limits: tuple[float, float, float] = (0.8, 0.8, 1.0)
+    # Legacy symmetric clipping limit for commanded yaw rate in rad/s.
+    yaw_rate_limit: float = 3.0
+    # Explicit lower clipping limit for commanded yaw rate in rad/s.
+    yaw_rate_lower_limit: float = -3.0
+    # Explicit upper clipping limit for commanded yaw rate in rad/s.
+    yaw_rate_upper_limit: float = 3.0
+
+
+@configclass
 class LandingSwayResetPoseRangeCfg:
     """Robot reset pose ranges used by ``reset_root_state_uniform``."""
 
     x: tuple[float, float] = (-5.0, 5.0)
     y: tuple[float, float] = (-5.0, 5.0)
-    z: tuple[float, float] = (0.7, 5.0)
+    z: tuple[float, float] = (0.1, 5.0)
     roll: tuple[float, float] = (-0.2, 0.2)
     pitch: tuple[float, float] = (-0.15, 0.15)
     yaw: tuple[float, float] = (-3.141592653589793, 3.141592653589793)
@@ -178,7 +196,7 @@ PLATFORM_STAGE_TRACK_XY_CFG = mdp.PlatformMotionStageCfg(
         phase_range_rad=(0.0, 2.0 * 3.141592653589793),
         spectral_decay=1.0,
     ),
-    max_linear_speed=1.2,
+    max_linear_speed=1.0,
     max_linear_acceleration=5.0,
 )
 
@@ -232,6 +250,7 @@ class LandingSwayPostInitCfg:
     """Single place to tune layout, reset, reward, platform, and domain randomization."""
 
     scene: LandingSwaySceneLayoutCfg = LandingSwaySceneLayoutCfg()
+    action_command_limits: LandingSwayActionCommandLimitsCfg = LandingSwayActionCommandLimitsCfg()
     reset_spawn: LandingSwayResetSpawnCfg = LandingSwayResetSpawnCfg()
     reward_weights: LandingSwayRewardWeightsCfg = LandingSwayRewardWeightsCfg()
     vertical_clearance: LandingSwayVerticalClearanceCfg = LandingSwayVerticalClearanceCfg()
@@ -314,7 +333,18 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.touchdown_quality.params["require_xy_within_box"] = bool(self.touchdown.require_xy_within_box)
         env_cfg.rewards.touchdown_quality.params["good_touchdown_reward"] = float(self.touchdown.good_touchdown_reward)
         env_cfg.rewards.touchdown_quality.params["bad_touchdown_reward"] = float(self.touchdown.bad_touchdown_reward)
+        env_cfg.rewards.touchdown_quality.params["center_proximity_bonus"] = float(self.touchdown.center_proximity_bonus)
         env_cfg.terminations.touchdown.params["threshold"] = float(self.touchdown.force_threshold_n)
+
+        env_cfg.actions.control.velocity_lower_limits = tuple(
+            float(v) for v in self.action_command_limits.velocity_lower_limits
+        )
+        env_cfg.actions.control.velocity_upper_limits = tuple(
+            float(v) for v in self.action_command_limits.velocity_upper_limits
+        )
+        env_cfg.actions.control.yaw_rate_limit = float(self.action_command_limits.yaw_rate_limit)
+        env_cfg.actions.control.yaw_rate_lower_limit = float(self.action_command_limits.yaw_rate_lower_limit)
+        env_cfg.actions.control.yaw_rate_upper_limit = float(self.action_command_limits.yaw_rate_upper_limit)
 
         env_cfg.terminations.attitude_tilt.params["maximum_roll_deg"] = float(
             self.termination_thresholds.attitude_tilt_max_roll_deg

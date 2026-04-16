@@ -74,8 +74,11 @@ class ActionsCfg:
         asset_name="robot",
         action_scale=(1.0, 1.0, 1.0, 1.0),
         action_offset=(0.0, 0.0, 0.0, 0.0),
-        velocity_limits=(1.2, 1.2, 1),
+        velocity_lower_limits=(-1.2, -1.2, -1.0),
+        velocity_upper_limits=(1.2, 1.2, 1.0),
         yaw_rate_limit=3.0,
+        yaw_rate_lower_limit=-3.0,
+        yaw_rate_upper_limit=3.0,
     )
 
 
@@ -227,6 +230,7 @@ class RewardsCfg:
             "touchdown_force_threshold": 2.0,
             "good_touchdown_reward": 5.0,
             "bad_touchdown_reward": -2.0,
+            "center_proximity_bonus": 0.0,
             "asset_cfg": SceneEntityCfg("robot"),
             "reference_asset_cfg": SceneEntityCfg("platform"),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),
@@ -295,7 +299,7 @@ class LandingSwayEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.robot.spawn.activate_contact_sensors = True
 
         self.viewer.eye = (8.0, 8.0, 6.0)
-        self.viewer.lookat = (-2.0, -2.0, 1.0)
+        self.viewer.lookat = (-5.0, -5.0, 2.0)
         self.viewer.resolution = (1920, 1080)
 
         self.sim.dt = 1.0 / 250.0
