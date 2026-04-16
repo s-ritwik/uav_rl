@@ -40,11 +40,10 @@ def root_quat_rel(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
 ) -> torch.Tensor:
-    """Reference orientation relative to asset, i.e. platform attitude as seen from the UAV."""
+    """UAV root quaternion in world frame."""
     asset = env.scene[asset_cfg.name]
-    reference_asset = env.scene[reference_asset_cfg.name]
-    rel_quat = math_utils.quat_mul(math_utils.quat_inv(asset.data.root_quat_w), reference_asset.data.root_quat_w)
-    return apply_quaternion_state_noise(env, rel_quat, env.cfg.domain_randomization.attitude_noise_std_rad)
+    quat_w = asset.data.root_quat_w
+    return apply_quaternion_state_noise(env, quat_w, env.cfg.domain_randomization.attitude_noise_std_rad)
 
 
 def root_ang_vel_rel(

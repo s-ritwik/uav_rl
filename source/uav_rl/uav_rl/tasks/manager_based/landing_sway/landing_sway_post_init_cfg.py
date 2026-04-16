@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from isaaclab.utils import configclass
@@ -16,12 +17,12 @@ class LandingSwayRewardWeightsCfg:
 
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
-    # mdp.failure_termination_penalty: scales failure penalty value (usually keep at 1.0).
-    terminated: float = 100.0
-    # mdp.touchdown_termination_reward: optional extra reward on touchdown termination (usually 0.0).
+    # mdp.failure_termination_penalty: scales failure penalty value 
+    terminated: float = 200.0
+    # mdp.touchdown_termination_reward: optional extra reward on touchdown termination 
     touchdown_terminated: float = 0.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
-    position_track: float = 100
+    position_track: float = 50.0
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
@@ -32,14 +33,15 @@ class LandingSwayRewardWeightsCfg:
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.08
     # mdp.angular_rate_l2: penalize body angular rates.
-    angular_rate: float = -0.05
+    angular_rate: float = -0.1
     # mdp.yaw_error_l2: penalize yaw error to target yaw.
-    yaw_error: float = -50.0
+    yaw_error: float = -.20#-50.0
     # mdp.flat_orientation_l2: penalize tilt from upright.
-    upright: float = -100.0
+    upright: float = -70.0
     # mdp.touchdown_quality_reward multiplier. Keep 1.0 when using explicit good/bad touchdown values below.
     touchdown_quality: float = 1.0
-
+    #
+    horizontal_velocity_match: float = -2.0
 
 @configclass
 class LandingSwayTouchdownCfg:
@@ -48,17 +50,17 @@ class LandingSwayTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.2
+    max_touchdown_speed_mps: float = 0.4
     # XY-center tolerance used only when require_xy_within_box=True.
-    max_xy_error_m: float = 0.35
+    max_xy_error_m: float = 0.4
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
     # Reward value applied on good touchdown event.
-    good_touchdown_reward: float = 40000.0
+    good_touchdown_reward: float = 5000.0
     # Reward value applied on bad touchdown event.
-    bad_touchdown_reward: float = -500.0
+    bad_touchdown_reward: float = -200.0
     # Extra shaped bonus on good touchdowns that increases as XY touchdown error approaches zero.
-    center_proximity_bonus: float = 10000.0
+    center_proximity_bonus: float = 100.0
 
 
 @configclass
@@ -74,9 +76,9 @@ class LandingSwayTerminationPenaltyCfg:
     """Penalty applied for selected failure termination terms."""
 
     # Penalty value used by mdp.failure_termination_penalty for matched failure terms.
-    failure_penalty: float = -40.0
+    failure_penalty: float = -10.0
     # Termination term names considered as failures (touchdown intentionally excluded).
-    failure_term_names: tuple[str, ...] = ("time_out", "attitude_tilt", "crash_low", "crash_high", "out_of_bounds")
+    failure_term_names: tuple[str, ...] = ( "time_out","attitude_tilt", "crash_low", "crash_high", "out_of_bounds")
 
 
 @configclass
@@ -88,7 +90,7 @@ class LandingSwayTerminationThresholdsCfg:
     # absolute pitch angle above this -> attitude_tilt.
     attitude_tilt_max_pitch_deg: float = 30.0
     # root height below this -> crash_low.
-    crash_low_min_height_m: float = -2.0
+    crash_low_min_height_m: float = -1.0
     # root height above this -> crash_high.
     crash_high_max_height_m: float = 7.0
     # XY distance from env origin above this -> out_of_bounds.
@@ -99,7 +101,15 @@ class LandingSwayTerminationThresholdsCfg:
 class LandingSwaySceneLayoutCfg:
     """Scene-wide layout knobs applied before manager startup."""
 
-    env_spacing: float = 10.0
+    env_spacing: float = 6.0
+
+
+@configclass
+class LandingSwayEpisodeCfg:
+    """Episode-level timing knobs."""
+
+    # Episode timeout used by the `time_out` termination term.
+    timeout_s: float = 20.0
 
 
 @configclass
@@ -113,9 +123,9 @@ class LandingSwayActionCommandLimitsCfg:
     # Legacy symmetric clipping limit for commanded yaw rate in rad/s.
     yaw_rate_limit: float = 3.0
     # Explicit lower clipping limit for commanded yaw rate in rad/s.
-    yaw_rate_lower_limit: float = -3.0
+    yaw_rate_lower_limit: float = -35.0*math.pi/180.0
     # Explicit upper clipping limit for commanded yaw rate in rad/s.
-    yaw_rate_upper_limit: float = 3.0
+    yaw_rate_upper_limit: float = 35.0*math.pi/180.0
 
 
 @configclass
@@ -250,6 +260,7 @@ class LandingSwayPostInitCfg:
     """Single place to tune layout, reset, reward, platform, and domain randomization."""
 
     scene: LandingSwaySceneLayoutCfg = LandingSwaySceneLayoutCfg()
+    episode: LandingSwayEpisodeCfg = LandingSwayEpisodeCfg()
     action_command_limits: LandingSwayActionCommandLimitsCfg = LandingSwayActionCommandLimitsCfg()
     reset_spawn: LandingSwayResetSpawnCfg = LandingSwayResetSpawnCfg()
     reward_weights: LandingSwayRewardWeightsCfg = LandingSwayRewardWeightsCfg()
@@ -258,7 +269,7 @@ class LandingSwayPostInitCfg:
     termination_penalty: LandingSwayTerminationPenaltyCfg = LandingSwayTerminationPenaltyCfg()
     termination_thresholds: LandingSwayTerminationThresholdsCfg = LandingSwayTerminationThresholdsCfg()
     platform_motion: LandingSwayPlatformMotionCfg = LandingSwayPlatformMotionCfg()
-    vehicle_z0_m: float = 0.053
+    vehicle_z0_m: float = 0.15 
 
     domain_randomization: mdp.LandingSwayDomainRandomizationCfg = mdp.LandingSwayDomainRandomizationCfg(
         # Flag for overall DR enable/disable
@@ -301,6 +312,7 @@ class LandingSwayPostInitCfg:
         """Apply overrides to the environment config before manager startup."""
 
         env_cfg.scene.env_spacing = self.scene.env_spacing
+        env_cfg.episode_length_s = float(self.episode.timeout_s)
 
         env_cfg.scene.platform.init_state.pos = self.platform_motion.placement.pos
         env_cfg.scene.platform.init_state.rot = self.platform_motion.placement.rot
@@ -321,6 +333,7 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.yaw_error.weight = self.reward_weights.yaw_error
         env_cfg.rewards.upright.weight = self.reward_weights.upright
         env_cfg.rewards.touchdown_quality.weight = self.reward_weights.touchdown_quality
+        env_cfg.rewards.horizontal_velocity_match.weight = self.reward_weights.horizontal_velocity_match
 
         env_cfg.rewards.vertical_clearance_excess.params["clearance_threshold_m"] = float(self.vertical_clearance.threshold_m)
         env_cfg.rewards.terminated.params["penalty"] = float(self.termination_penalty.failure_penalty)

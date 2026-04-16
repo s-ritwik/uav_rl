@@ -34,7 +34,7 @@ class LandingSwaySceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = IRIS_CFG.replace(
         prim_path="{ENV_REGEX_NS}/Robot",
-        spawn=IRIS_CFG.spawn.replace(usd_path="/home/rycker/src/uav_rl/source/uav_rl/uav_rl/assets/robots/iris/iris_capsule.usd"),
+        spawn=IRIS_CFG.spawn.replace(usd_path="/home/rycker/src/uav_rl/source/uav_rl/uav_rl/assets/robots/iris/iris_legs.usd"),
     )
 
     # Track contact forces on robot bodies for contact-based termination.
@@ -219,6 +219,7 @@ class RewardsCfg:
         weight=-1,
         params={"target_yaw": 0.0, "asset_cfg": SceneEntityCfg("robot")},
     )
+    # penaliszing xy of projected gracity
     upright = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0, params={"asset_cfg": SceneEntityCfg("robot")})
     touchdown_quality = RewTerm(
         func=mdp.touchdown_quality_reward,
@@ -236,15 +237,15 @@ class RewardsCfg:
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),
         },
     )
-    # horizontal_velocity_match = RewTerm(
-    #     func=mdp.horizontal_velocity_error_l2,
-    #     weight=-0.5,
-    #     params={
-    #         "target_rel_xy": (0.0, 0.0),
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #         "reference_asset_cfg": SceneEntityCfg("platform"),
-    #     },
-    # )
+    horizontal_velocity_match = RewTerm(
+        func=mdp.horizontal_velocity_error_l2,
+        weight=-0.5,
+        params={
+            "target_rel_xy": (0.0, 0.0),
+            "asset_cfg": SceneEntityCfg("robot"),
+            "reference_asset_cfg": SceneEntityCfg("platform"),
+        },
+    )
     # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
     # action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.003)
 

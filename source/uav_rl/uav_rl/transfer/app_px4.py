@@ -87,7 +87,7 @@ args_cli, _ = parser.parse_known_args()
 if args_cli.num_drones < 1:
     parser.error("--num_drones must be greater than or equal to 1.")
 
-IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_capsule.usd").resolve())
+IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_legs.usd").resolve())
 PLATFORM_SIZE = (1.0, 1.0, 0.2)
 
 
