@@ -33,9 +33,9 @@ class LandingSwayRewardWeightsCfg:
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.01
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
-    uav_acceleration: float = -0.1
+    uav_acceleration: float = -0.5
     # mdp.angular_rate_l2: penalize body angular rates.
-    angular_rate: float = -0.1
+    angular_rate: float = -0.5
     # mdp.yaw_rate_error_l2: penalize body-frame yaw-rate error around target yaw rate.
     yaw_rate_error: float = -10.0
     # mdp.yaw_error_l2: penalize yaw error to target yaw.
@@ -67,13 +67,13 @@ class LandingSwayTouchdownCfg:
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
     # If True, good touchdown also requires roll/pitch/yaw to satisfy the attitude limits below.
-    require_attitude_within_limits: bool = False
+    require_attitude_within_limits: bool = True
     # Good touchdown only if absolute roll at touchdown is within this limit.
-    max_touchdown_roll_deg: float = 20.0
+    max_touchdown_roll_deg: float = 12.0
     # Good touchdown only if absolute pitch at touchdown is within this limit.
-    max_touchdown_pitch_deg: float = 20.0
+    max_touchdown_pitch_deg: float = 12.0
     # Good touchdown only if wrapped yaw error to target_touchdown_yaw_deg is within this limit.
-    max_touchdown_yaw_deg: float = 90.0
+    max_touchdown_yaw_deg: float = 80.0
     # World-frame yaw target used by the touchdown yaw gate.
     target_touchdown_yaw_deg: float = 0.0
     # Reward value applied on good touchdown event.
@@ -89,7 +89,7 @@ class LandingSwayVerticalClearanceCfg:
     """Linear vertical-clearance penalty threshold."""
 
     # Penalty activates when z_clearance > threshold_m.
-    threshold_m: float = 0.5
+    threshold_m: float = 1.0
 
 
 @configclass
