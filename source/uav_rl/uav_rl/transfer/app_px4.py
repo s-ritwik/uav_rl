@@ -71,7 +71,7 @@ parser.add_argument("--platform_z", type=float, default=0.1, help="Platform cent
 parser.add_argument(
     "--platform_texture",
     type=str,
-    default=str((Path(__file__).resolve().parents[1] / "assets" / "Aruco" / "aruco_mark_fractal.png").resolve()),
+    default=None,
     help="PNG texture applied to the platform top decal.",
 )
 parser.add_argument(
@@ -89,6 +89,12 @@ if args_cli.num_drones < 1:
 
 IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_legs.usd").resolve())
 PLATFORM_SIZE = (1.0, 1.0, 0.2)
+PLATFORM_ARUCO_TEXTURE_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "Aruco" / "aruco_mark_fractal.png"
+).resolve()
+
+if args_cli.platform_texture is None:
+    args_cli.platform_texture = str(PLATFORM_ARUCO_TEXTURE_PATH)
 
 
 def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
@@ -667,8 +673,15 @@ def _build_platform_stage_cfg(name: str) -> PlatformMotionStageCfg:
     raise ValueError(f"Unknown motion stage '{name}'")
 
 
-def _load_vanilla_add_platform_top_decal():
-    module_path = Path(__file__).resolve().parents[1] / "tasks" / "manager_based" / "vanilla" / "mdp" / "events.py"
+def _load_landing_sway_add_platform_top_decal():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "tasks"
+        / "manager_based"
+        / "landing_sway"
+        / "mdp"
+        / "events.py"
+    )
     source = module_path.read_text(encoding="utf-8")
     parsed = ast.parse(source, filename=str(module_path))
     target_fn = None
@@ -709,7 +722,7 @@ class PegasusApp:
         self.state_publishers = []
         self.px4_backends = []
         self.platform_motion_started = False
-        self._vanilla_add_platform_top_decal = _load_vanilla_add_platform_top_decal()
+        self._landing_sway_add_platform_top_decal = _load_landing_sway_add_platform_top_decal()
 
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -861,7 +874,7 @@ class PegasusApp:
                 env_prim_paths=["/World"],
             )
         )
-        self._vanilla_add_platform_top_decal(
+        self._landing_sway_add_platform_top_decal(
             env_proxy,
             None,
             texture_path=args_cli.platform_texture,

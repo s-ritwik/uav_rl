@@ -18,30 +18,41 @@ class LandingSwayRewardWeightsCfg:
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
     # mdp.failure_termination_penalty: scales failure penalty value 
-    terminated: float = 200.0
+    terminated: float = 50.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination 
-    touchdown_terminated: float = 0.0
+    touchdown_terminated: float = 20.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
-    position_track: float = 50.0
+    position_track: float = 20.0
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
     # pushes agent to land
-    vertical_clearance_excess: float = 0#-1.0
+    vertical_clearance_excess: float = -0.0
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
-    vertical_speed: float = -0.08
+    vertical_speed: float = -0.01
+    # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
+    uav_acceleration: float = -0.1
     # mdp.angular_rate_l2: penalize body angular rates.
     angular_rate: float = -0.1
+    # mdp.yaw_rate_error_l2: penalize body-frame yaw-rate error around target yaw rate.
+    yaw_rate_error: float = -10.0
     # mdp.yaw_error_l2: penalize yaw error to target yaw.
-    yaw_error: float = -.20#-50.0
+    yaw_error: float = -1.0
     # mdp.flat_orientation_l2: penalize tilt from upright.
-    upright: float = -70.0
+    upright: float = -10.0
     # mdp.touchdown_quality_reward multiplier. Keep 1.0 when using explicit good/bad touchdown values below.
     touchdown_quality: float = 1.0
     #
-    horizontal_velocity_match: float = -2.0
+    horizontal_velocity_match: float = -0.2
+
+
+@configclass
+class LandingSwayPositionTrackCfg:
+    """Shape parameters for the dense XY position reward."""
+
+    std_m: float = 2.0
 
 @configclass
 class LandingSwayTouchdownCfg:
@@ -50,17 +61,27 @@ class LandingSwayTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.4
+    max_touchdown_speed_mps: float = 0.3
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.4
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
+    # If True, good touchdown also requires roll/pitch/yaw to satisfy the attitude limits below.
+    require_attitude_within_limits: bool = False
+    # Good touchdown only if absolute roll at touchdown is within this limit.
+    max_touchdown_roll_deg: float = 20.0
+    # Good touchdown only if absolute pitch at touchdown is within this limit.
+    max_touchdown_pitch_deg: float = 20.0
+    # Good touchdown only if wrapped yaw error to target_touchdown_yaw_deg is within this limit.
+    max_touchdown_yaw_deg: float = 90.0
+    # World-frame yaw target used by the touchdown yaw gate.
+    target_touchdown_yaw_deg: float = 0.0
     # Reward value applied on good touchdown event.
     good_touchdown_reward: float = 5000.0
     # Reward value applied on bad touchdown event.
-    bad_touchdown_reward: float = -200.0
+    bad_touchdown_reward: float = -100.0
     # Extra shaped bonus on good touchdowns that increases as XY touchdown error approaches zero.
-    center_proximity_bonus: float = 100.0
+    center_proximity_bonus: float = 1000.0
 
 
 @configclass
@@ -68,7 +89,7 @@ class LandingSwayVerticalClearanceCfg:
     """Linear vertical-clearance penalty threshold."""
 
     # Penalty activates when z_clearance > threshold_m.
-    threshold_m: float = 0.0
+    threshold_m: float = 0.5
 
 
 @configclass
@@ -109,7 +130,7 @@ class LandingSwayEpisodeCfg:
     """Episode-level timing knobs."""
 
     # Episode timeout used by the `time_out` termination term.
-    timeout_s: float = 20.0
+    timeout_s: float = 12.0
 
 
 @configclass
@@ -264,6 +285,7 @@ class LandingSwayPostInitCfg:
     action_command_limits: LandingSwayActionCommandLimitsCfg = LandingSwayActionCommandLimitsCfg()
     reset_spawn: LandingSwayResetSpawnCfg = LandingSwayResetSpawnCfg()
     reward_weights: LandingSwayRewardWeightsCfg = LandingSwayRewardWeightsCfg()
+    position_track: LandingSwayPositionTrackCfg = LandingSwayPositionTrackCfg()
     vertical_clearance: LandingSwayVerticalClearanceCfg = LandingSwayVerticalClearanceCfg()
     touchdown: LandingSwayTouchdownCfg = LandingSwayTouchdownCfg()
     termination_penalty: LandingSwayTerminationPenaltyCfg = LandingSwayTerminationPenaltyCfg()
@@ -325,11 +347,14 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.terminated.weight = self.reward_weights.terminated
         env_cfg.rewards.touchdown_terminated.weight = self.reward_weights.touchdown_terminated
         env_cfg.rewards.position_track.weight = self.reward_weights.position_track
+        env_cfg.rewards.position_track.params["std"] = float(self.position_track.std_m)
         env_cfg.rewards.vertical_position.weight = self.reward_weights.vertical_position
         env_cfg.rewards.vertical_clearance_excess.weight = self.reward_weights.vertical_clearance_excess
         env_cfg.rewards.horizontal_speed.weight = self.reward_weights.horizontal_speed
         env_cfg.rewards.vertical_speed.weight = self.reward_weights.vertical_speed
+        env_cfg.rewards.uav_acceleration.weight = self.reward_weights.uav_acceleration
         env_cfg.rewards.angular_rate.weight = self.reward_weights.angular_rate
+        env_cfg.rewards.yaw_rate_error.weight = self.reward_weights.yaw_rate_error
         env_cfg.rewards.yaw_error.weight = self.reward_weights.yaw_error
         env_cfg.rewards.upright.weight = self.reward_weights.upright
         env_cfg.rewards.touchdown_quality.weight = self.reward_weights.touchdown_quality
@@ -344,6 +369,15 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.touchdown_quality.params["max_touchdown_speed_mps"] = float(self.touchdown.max_touchdown_speed_mps)
         env_cfg.rewards.touchdown_quality.params["max_xy_error_m"] = float(self.touchdown.max_xy_error_m)
         env_cfg.rewards.touchdown_quality.params["require_xy_within_box"] = bool(self.touchdown.require_xy_within_box)
+        env_cfg.rewards.touchdown_quality.params["require_attitude_within_limits"] = bool(
+            self.touchdown.require_attitude_within_limits
+        )
+        env_cfg.rewards.touchdown_quality.params["max_touchdown_roll_deg"] = float(self.touchdown.max_touchdown_roll_deg)
+        env_cfg.rewards.touchdown_quality.params["max_touchdown_pitch_deg"] = float(self.touchdown.max_touchdown_pitch_deg)
+        env_cfg.rewards.touchdown_quality.params["max_touchdown_yaw_deg"] = float(self.touchdown.max_touchdown_yaw_deg)
+        env_cfg.rewards.touchdown_quality.params["target_touchdown_yaw_deg"] = float(
+            self.touchdown.target_touchdown_yaw_deg
+        )
         env_cfg.rewards.touchdown_quality.params["good_touchdown_reward"] = float(self.touchdown.good_touchdown_reward)
         env_cfg.rewards.touchdown_quality.params["bad_touchdown_reward"] = float(self.touchdown.bad_touchdown_reward)
         env_cfg.rewards.touchdown_quality.params["center_proximity_bonus"] = float(self.touchdown.center_proximity_bonus)

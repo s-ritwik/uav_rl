@@ -213,7 +213,17 @@ class RewardsCfg:
     # Stabilize around the hover setpoint.
     horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.08)
     vertical_speed = RewTerm(func=mdp.vertical_speed_l2, weight=-0.08)
+    uav_acceleration = RewTerm(
+        func=mdp.uav_linear_acceleration_l2,
+        weight=0.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["body"])},
+    )
     angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.05)
+    yaw_rate_error = RewTerm(
+        func=mdp.yaw_rate_error_l2,
+        weight=-0.05,
+        params={"target_yaw_rate": 0.0, "asset_cfg": SceneEntityCfg("robot")},
+    )
     yaw_error = RewTerm(
         func=mdp.yaw_error_l2,
         weight=-1,
@@ -228,6 +238,11 @@ class RewardsCfg:
             "max_touchdown_speed_mps": 0.25,
             "max_xy_error_m": 0.20,
             "require_xy_within_box": False,
+            "require_attitude_within_limits": True,
+            "max_touchdown_roll_deg": 10.0,
+            "max_touchdown_pitch_deg": 10.0,
+            "max_touchdown_yaw_deg": 10.0,
+            "target_touchdown_yaw_deg": 0.0,
             "touchdown_force_threshold": 2.0,
             "good_touchdown_reward": 5.0,
             "bad_touchdown_reward": -2.0,

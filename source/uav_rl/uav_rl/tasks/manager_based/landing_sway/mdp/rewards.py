@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
 
-from isaaclab.assets import RigidObject
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import math as math_utils
 from .landing_state import touchdown_just_happened, touchdown_pre_rel_vz, update_touchdown_state
@@ -150,11 +151,30 @@ def vertical_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Scen
     return torch.square(asset.data.root_lin_vel_w[:, 2])
 
 
+def uav_linear_acceleration_l2(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["body"]),
+) -> torch.Tensor:
+    """Penalize UAV body linear acceleration using the COM acceleration reported by PhysX.
+
+    The default configuration targets the main UAV body only, which keeps the signal focused on
+    the vehicle acceleration instead of summing over every articulation link.
+    """
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.sum(torch.norm(asset.data.body_lin_acc_w[:, asset_cfg.body_ids, :], dim=-1), dim=1)
+
+
 def touchdown_quality_reward(
     env: "ManagerBasedRLEnv",
     max_touchdown_speed_mps: float = 0.25,
     max_xy_error_m: float = 0.20,
     require_xy_within_box: bool = False,
+    require_attitude_within_limits: bool = True,
+    max_touchdown_roll_deg: float = 10.0,
+    max_touchdown_pitch_deg: float = 10.0,
+    max_touchdown_yaw_deg: float = 10.0,
+    target_touchdown_yaw_deg: float = 0.0,
     touchdown_force_threshold: float = 2.0,
     good_touchdown_reward: float = 4.0,
     bad_touchdown_reward: float = -5.0,
@@ -168,6 +188,7 @@ def touchdown_quality_reward(
     Positive reward if, at touchdown onset (contact force crosses threshold):
     - descent speed is <= max_touchdown_speed_mps, and
     - drone root is within max_xy_error_m of platform center in XY.
+    - if enabled, roll, pitch, and wrapped yaw error are within configured limits.
     Good touchdowns can also receive an extra shaped bonus that increases as the
     XY touchdown point approaches the platform center.
     Otherwise a negative reward is issued.
@@ -191,12 +212,24 @@ def touchdown_quality_reward(
     pos_rel = _relative_position(env, asset_cfg, reference_asset_cfg)
     xy_error = torch.linalg.norm(pos_rel[:, :2], dim=1)
 
+    asset: RigidObject = env.scene[asset_cfg.name]
+    roll, pitch, yaw = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
+    target_yaw_rad = math.radians(float(target_touchdown_yaw_deg))
+    yaw_error = torch.atan2(torch.sin(yaw - target_yaw_rad), torch.cos(yaw - target_yaw_rad))
+
     reward = torch.zeros_like(pre_rel_vz)
     speed_ok = descent_speed <= float(max_touchdown_speed_mps)
-    if require_xy_within_box:
-        good = speed_ok & (xy_error <= float(max_xy_error_m))
+    roll_ok = torch.abs(roll) <= math.radians(float(max_touchdown_roll_deg))
+    pitch_ok = torch.abs(pitch) <= math.radians(float(max_touchdown_pitch_deg))
+    yaw_ok = torch.abs(yaw_error) <= math.radians(float(max_touchdown_yaw_deg))
+    if require_attitude_within_limits:
+        attitude_ok = roll_ok & pitch_ok & yaw_ok
     else:
-        good = speed_ok
+        attitude_ok = torch.ones_like(speed_ok, dtype=torch.bool)
+    if require_xy_within_box:
+        good = speed_ok & attitude_ok & (xy_error <= float(max_xy_error_m))
+    else:
+        good = speed_ok & attitude_ok
 
     good_reward = torch.full_like(pre_rel_vz, float(good_touchdown_reward))
     if float(center_proximity_bonus) != 0.0:
@@ -218,6 +251,17 @@ def angular_rate_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneE
     return torch.sum(torch.square(asset.data.root_ang_vel_b), dim=1)
 
 
+def yaw_rate_error_l2(
+    env: "ManagerBasedRLEnv",
+    target_yaw_rate: float = 0.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Squared yaw-rate error using body-frame z angular velocity."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    yaw_rate = asset.data.root_ang_vel_b[:, 2]
+    return torch.square(yaw_rate - float(target_yaw_rate))
+
+
 def yaw_error_l2(
     env: "ManagerBasedRLEnv",
     target_yaw: float = 0.0,
@@ -231,5 +275,6 @@ def yaw_error_l2(
     y = quat_wxyz[:, 2]
     z = quat_wxyz[:, 3]
     yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    # _, _, yaw = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
     yaw_error = torch.atan2(torch.sin(yaw - target_yaw), torch.cos(yaw - target_yaw))
     return torch.square(yaw_error)
