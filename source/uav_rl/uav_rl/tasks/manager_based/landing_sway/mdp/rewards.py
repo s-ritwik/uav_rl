@@ -170,6 +170,11 @@ def velocity_action_rate_l2(env: "ManagerBasedRLEnv") -> torch.Tensor:
     return torch.sum(torch.square(env.action_manager.action[:, :3] - env.action_manager.prev_action[:, :3]), dim=1)
 
 
+def raw_action_component_l2(env: "ManagerBasedRLEnv", action_index: int) -> torch.Tensor:
+    """Penalize one raw policy action component by squared magnitude."""
+    return torch.square(env.action_manager.action[:, int(action_index)])
+
+
 def touchdown_quality_reward(
     env: "ManagerBasedRLEnv",
     max_touchdown_speed_mps: float = 0.25,

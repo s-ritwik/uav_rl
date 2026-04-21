@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vehicle-id", type=int, default=0, help="Vehicle id suffix used in ROS topics.")
     parser.add_argument("--policy-rate-hz", type=float, default=25.0, help="Policy inference rate.")
     parser.add_argument("--cmd-publish-rate-hz", type=float, default=25.0, help="Rate for publishing cmd_vel.")
-    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-21_10-33-28_landing_sway_2.6.3/exported/policy.pt", help="Path to exported policy.pt.")
+    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-21_13-43-23_landing_sway_2.7.0/exported/policy.pt", help="Path to exported policy.pt.")
     parser.add_argument("--checkpoint-path", type=str, default=None, help="Path to an RSL-RL checkpoint file.")
     parser.add_argument(
         "--load-run",
@@ -65,10 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.15,
         help="Constant landing-gear/root offset subtracted from relative z to match landing_sway observations.",
     )
-    parser.add_argument("--velocity-limit-x", type=float, default=1.2)
-    parser.add_argument("--velocity-limit-y", type=float, default=1.2)
-    parser.add_argument("--velocity-limit-z", type=float, default=1.0)
-    parser.add_argument("--yaw-rate-limit", type=float, default=3.0)
+    parser.add_argument("--velocity-limit-x", type=float, default=None, help="Deprecated symmetric |vx| limit.")
+    parser.add_argument("--velocity-limit-y", type=float, default=None, help="Deprecated symmetric |vy| limit.")
+    parser.add_argument("--velocity-limit-z", type=float, default=None, help="Deprecated symmetric |vz| limit.")
+    parser.add_argument("--yaw-rate-limit", type=float, default=None, help="Deprecated symmetric |yaw_rate| limit.")
+    parser.add_argument("--velocity-lower-limit-x", type=float, default=-0.8)
+    parser.add_argument("--velocity-lower-limit-y", type=float, default=-0.8)
+    parser.add_argument("--velocity-lower-limit-z", type=float, default=-0.8)
+    parser.add_argument("--velocity-upper-limit-x", type=float, default=0.8)
+    parser.add_argument("--velocity-upper-limit-y", type=float, default=0.8)
+    parser.add_argument("--velocity-upper-limit-z", type=float, default=1.0)
+    parser.add_argument("--yaw-rate-lower-limit", type=float, default=-35.0 * np.pi / 180.0)
+    parser.add_argument("--yaw-rate-upper-limit", type=float, default=35.0 * np.pi / 180.0)
     parser.add_argument(
         "--enable-proximity-disarm",
         type=int,
@@ -273,10 +281,28 @@ def _run(args) -> None:
                 checkpoint_path=str(checkpoint_path) if checkpoint_path is not None else None,
             )
             self.device = torch.device(_resolve_policy_device(args.policy_device))
-            self.velocity_limits = np.array(
-                [args.velocity_limit_x, args.velocity_limit_y, args.velocity_limit_z], dtype=np.float32
+            self.velocity_lower_limits = np.array(
+                [
+                    -args.velocity_limit_x if args.velocity_limit_x is not None else args.velocity_lower_limit_x,
+                    -args.velocity_limit_y if args.velocity_limit_y is not None else args.velocity_lower_limit_y,
+                    -args.velocity_limit_z if args.velocity_limit_z is not None else args.velocity_lower_limit_z,
+                ],
+                dtype=np.float32,
             )
-            self.yaw_rate_limit = float(args.yaw_rate_limit)
+            self.velocity_upper_limits = np.array(
+                [
+                    args.velocity_limit_x if args.velocity_limit_x is not None else args.velocity_upper_limit_x,
+                    args.velocity_limit_y if args.velocity_limit_y is not None else args.velocity_upper_limit_y,
+                    args.velocity_limit_z if args.velocity_limit_z is not None else args.velocity_upper_limit_z,
+                ],
+                dtype=np.float32,
+            )
+            self.yaw_rate_lower_limit = float(
+                -args.yaw_rate_limit if args.yaw_rate_limit is not None else args.yaw_rate_lower_limit
+            )
+            self.yaw_rate_upper_limit = float(
+                args.yaw_rate_limit if args.yaw_rate_limit is not None else args.yaw_rate_upper_limit
+            )
             self.vehicle_z0_m = float(args.vehicle_z0_m)
             self.enable_proximity_disarm = bool(args.enable_proximity_disarm)
             self.disarm_rel_x_threshold = float(args.disarm_rel_x_threshold)
@@ -331,7 +357,9 @@ def _run(args) -> None:
                 f"cmd_vel_out='{self.cmd_vel_topic}', "
                 f"velocity_out='{self.velocity_cmd_topic}', "
                 f"yaw_rate_out='{self.yaw_rate_cmd_topic}', "
-                f"disarm_out='{self.disarm_cmd_topic}'\n"
+                f"disarm_out='{self.disarm_cmd_topic}', "
+                f"vel_limits=({self.velocity_lower_limits.tolist()} .. {self.velocity_upper_limits.tolist()}), "
+                f"yaw_limits=({self.yaw_rate_lower_limit:.3f} .. {self.yaw_rate_upper_limit:.3f})\n"
                 "Proximity disarm: "
                 f"enabled={self.enable_proximity_disarm}, "
                 f"thresholds=({self.disarm_rel_x_threshold:.3f}, "
@@ -595,8 +623,8 @@ def _run(args) -> None:
                     raw_action = self.policy.act(obs_tensor)[0].detach().cpu().numpy().astype(np.float32)
 
                 cmd_action = raw_action.copy()
-                cmd_action[:3] = np.clip(cmd_action[:3], -self.velocity_limits, self.velocity_limits)
-                cmd_action[3] = float(np.clip(cmd_action[3], -self.yaw_rate_limit, self.yaw_rate_limit))
+                cmd_action[:3] = np.clip(cmd_action[:3], self.velocity_lower_limits, self.velocity_upper_limits)
+                cmd_action[3] = float(np.clip(cmd_action[3], self.yaw_rate_lower_limit, self.yaw_rate_upper_limit))
                 self.last_obs_action = raw_action
                 self.last_cmd_action = cmd_action
                 self.last_policy_time = now
@@ -605,6 +633,8 @@ def _run(args) -> None:
                 if args.debug_every > 0 and self.step_count % args.debug_every == 0:
                     self._log_info(
                         f"policy_step={self.step_count} obs_z={float(obs[2]):.3f} "
+                        f"raw_action={self.last_obs_action.tolist()} "
+                        f"cmd_action={self.last_cmd_action.tolist()} "
                         f"vel_sp={self.last_cmd_action[:3].tolist()} yaw_rate={float(self.last_cmd_action[3]):.3f}"
                     )
 

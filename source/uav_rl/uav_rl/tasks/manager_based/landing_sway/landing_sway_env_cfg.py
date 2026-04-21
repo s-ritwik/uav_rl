@@ -286,7 +286,10 @@ class RewardsCfg:
         },
     )
     # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
-    # action_magnitude = RewTerm(func=mdp.action_l2, weight=-0.003)
+    action_magnitude_x = RewTerm(func=mdp.raw_action_component_l2, weight=0.0, params={"action_index": 0})
+    action_magnitude_y = RewTerm(func=mdp.raw_action_component_l2, weight=0.0, params={"action_index": 1})
+    action_magnitude_z = RewTerm(func=mdp.raw_action_component_l2, weight=0.0, params={"action_index": 2})
+    action_magnitude_yaw_rate = RewTerm(func=mdp.raw_action_component_l2, weight=0.0, params={"action_index": 3})
 
 
 @configclass

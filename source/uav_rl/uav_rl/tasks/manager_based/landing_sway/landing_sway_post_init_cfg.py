@@ -32,14 +32,22 @@ class LandingSwayRewardWeightsCfg:
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.01
+    # mdp.raw_action_component_l2: penalize large raw policy vx action.
+    action_magnitude_x: float = -1.5
+    # mdp.raw_action_component_l2: penalize large raw policy vy action.
+    action_magnitude_y: float = -1.5
+    # mdp.raw_action_component_l2: penalize large raw policy vz action.
+    action_magnitude_z: float = -1.5
+    # mdp.raw_action_component_l2: penalize large raw policy yaw-rate action.
+    action_magnitude_yaw_rate: float = -1.2
     # mdp.velocity_action_rate_l2:Continuity error penalize step-to-step change in commanded vx, vy, vz.
-    velocity_action_rate: float = -0.5
+    velocity_action_rate: float = -25.0
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
     uav_acceleration: float = -0.5
     # mdp.angular_rate_l2: penalize body angular rates.
     angular_rate: float = -0.5
     # mdp.angular_velocity_rate_l2: Continuity error :penalize step-to-step change in measured body-frame wx, wy, wz.
-    angular_velocity_rate: float = -0.1
+    angular_velocity_rate: float = -50.0
     # mdp.angular_rate_xy_l2: penalize body-frame roll/pitch rates only.
     angular_rate_xy: float = -1.0#0.0
     # mdp.yaw_rate_error_l2: penalize body-frame yaw-rate error around target yaw rate.
@@ -47,7 +55,7 @@ class LandingSwayRewardWeightsCfg:
     # mdp.yaw_error_l2: penalize yaw error to target yaw.
     yaw_error: float = -2.0
     # mdp.flat_orientation_l2: penalize tilt from upright.
-    upright: float = -10.0
+    upright: float = -20.0
     # mdp.touchdown_quality_reward multiplier. Keep 1.0 when using explicit good/bad touchdown values below.
     touchdown_quality: float = 1.0
     #
@@ -95,7 +103,7 @@ class LandingSwayVerticalClearanceCfg:
     """Linear vertical-clearance penalty threshold."""
 
     # Penalty activates when z_clearance > threshold_m.
-    threshold_m: float = 0.5
+    threshold_m: float = 1.0
 
 
 @configclass
@@ -362,6 +370,10 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.vertical_clearance_excess.weight = self.reward_weights.vertical_clearance_excess
         env_cfg.rewards.horizontal_speed.weight = self.reward_weights.horizontal_speed
         env_cfg.rewards.vertical_speed.weight = self.reward_weights.vertical_speed
+        env_cfg.rewards.action_magnitude_x.weight = self.reward_weights.action_magnitude_x
+        env_cfg.rewards.action_magnitude_y.weight = self.reward_weights.action_magnitude_y
+        env_cfg.rewards.action_magnitude_z.weight = self.reward_weights.action_magnitude_z
+        env_cfg.rewards.action_magnitude_yaw_rate.weight = self.reward_weights.action_magnitude_yaw_rate
         env_cfg.rewards.velocity_action_rate.weight = self.reward_weights.velocity_action_rate
         env_cfg.rewards.uav_acceleration.weight = self.reward_weights.uav_acceleration
         env_cfg.rewards.angular_rate.weight = self.reward_weights.angular_rate
