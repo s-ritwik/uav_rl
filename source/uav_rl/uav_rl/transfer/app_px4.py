@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import ast
 import math
 import os
 import signal
 import subprocess
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -74,6 +72,9 @@ parser.add_argument(
     default=None,
     help="PNG texture applied to the platform top decal.",
 )
+parser.add_argument("--platform_static_friction", type=float, default=40.0, help="Platform static friction.")
+parser.add_argument("--platform_dynamic_friction", type=float, default=40.0, help="Platform dynamic friction.")
+parser.add_argument("--platform_restitution", type=float, default=0.0, help="Platform restitution.")
 parser.add_argument(
     "--motion_stage",
     type=str,
@@ -146,8 +147,10 @@ enable_extension("isaacsim.ros2.bridge")
 
 from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 from pymavlink import mavutil
+from pxr import PhysxSchema, Sdf, UsdPhysics, UsdShade
 from scipy.spatial.transform import Rotation
 import rclpy
+from std_msgs.msg import Bool
 
 from pegasus.simulator.params import SIMULATION_ENVIRONMENTS, WORLD_SETTINGS
 from pegasus.simulator.logic.backends import Backend
@@ -159,11 +162,11 @@ from pegasus.simulator.logic.rotations import rot_ENU_to_NED
 try:
     from .ardupilot_ros import PlatformRos2Publisher
     from .moving_platform import HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
-    from .topics import cmd_vel_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
+    from .topics import cmd_vel_topic, disarm_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
 except ImportError:
     from ardupilot_ros import PlatformRos2Publisher
     from moving_platform import HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
-    from topics import cmd_vel_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
+    from topics import cmd_vel_topic, disarm_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
 
 
 class PX4Ros2VelocityBridge(Backend):
@@ -198,6 +201,9 @@ class PX4Ros2VelocityBridge(Backend):
         self._flightmode = None
         self._offboard_enabled = False
         self._armed = False
+        self._pending_arm_state = None
+        self._disarm_requested = False
+        self._last_disarm_request_time = 0.0
         self._position_estimate_ready = False
         self._first_heartbeat_time = None
         self._last_wait_log_time = 0.0
@@ -223,15 +229,22 @@ class PX4Ros2VelocityBridge(Backend):
         self.node = rclpy.create_node(f"px4_ros2_bridge_{vehicle_id}")
         topic = cmd_vel_topic(namespace, vehicle_id)
         self._cmd_sub = self.node.create_subscription(Twist, topic, self._cmd_vel_callback, 10)
+        disarm_cmd_topic = disarm_topic(namespace, vehicle_id)
+        self._disarm_sub = self.node.create_subscription(Bool, disarm_cmd_topic, self._disarm_callback, 10)
 
         carb.log_warn(
             f"[PX4Ros2VelocityBridge] vehicle_id={vehicle_id} listening on ROS 2 topic '{topic}' "
-            f"and PX4 offboard port {self._offboard_port}"
+            f"and disarm topic '{disarm_cmd_topic}' and PX4 offboard port {self._offboard_port}"
         )
 
     def _cmd_vel_callback(self, msg: Twist):
         self._latest_cmd = msg
         self._last_cmd_time = time.monotonic()
+
+    def _disarm_callback(self, msg: Bool):
+        if bool(msg.data):
+            self._disarm_requested = True
+            carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: received disarm request")
 
     def _drain_mavlink(self):
         if self._connection is None:
@@ -272,7 +285,11 @@ class PX4Ros2VelocityBridge(Backend):
                 if command == mavutil.mavlink.MAV_CMD_DO_SET_MODE and result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
                     self._offboard_enabled = True
                 if command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM and result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
-                    self._armed = True
+                    if self._pending_arm_state is not None:
+                        self._armed = bool(self._pending_arm_state)
+                        self._pending_arm_state = None
+                    if not self._armed:
+                        self._disarm_requested = False
 
     def _wait_ready(self, now: float) -> bool:
         wait_reasons = []
@@ -381,6 +398,7 @@ class PX4Ros2VelocityBridge(Backend):
                 0.0,
                 0.0,
             )
+            self._pending_arm_state = True
             self._last_action_time = now
             self._last_arm_request_time = now
             carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: retrying arm")
@@ -399,6 +417,34 @@ class PX4Ros2VelocityBridge(Backend):
             carb.log_warn(
                 f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: armed in OFFBOARD, climbing to {self._auto_takeoff_alt:.2f} m"
             )
+
+    def _request_force_disarm(self, now: float):
+        if not self._disarm_requested:
+            return
+        if not self._connected or self._target_system is None or self._target_component is None:
+            return
+        if not self._armed:
+            self._disarm_requested = False
+            return
+        if now - self._last_disarm_request_time < 1.0:
+            return
+
+        self._connection.mav.command_long_send(
+            self._target_system,
+            self._target_component,
+            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+            0,
+            0.0,
+            21196.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        self._pending_arm_state = False
+        self._last_disarm_request_time = now
+        carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: requested force disarm")
 
     def _update_takeoff_state(self, now: float):
         if self._takeoff_state != "taking_off":
@@ -432,6 +478,7 @@ class PX4Ros2VelocityBridge(Backend):
         self._drain_mavlink()
         now = time.monotonic()
         self._send_velocity_command(now)
+        self._request_force_disarm(now)
         self._request_offboard_and_arm(now)
         self._update_takeoff_state(now)
 
@@ -447,6 +494,9 @@ class PX4Ros2VelocityBridge(Backend):
         self._flightmode = None
         self._offboard_enabled = False
         self._armed = False
+        self._pending_arm_state = None
+        self._disarm_requested = False
+        self._last_disarm_request_time = 0.0
         self._position_estimate_ready = False
         self._first_heartbeat_time = None
         self._last_wait_log_time = 0.0
@@ -477,6 +527,9 @@ class PX4Ros2VelocityBridge(Backend):
         self._flightmode = None
         self._offboard_enabled = False
         self._armed = False
+        self._pending_arm_state = None
+        self._disarm_requested = False
+        self._last_disarm_request_time = 0.0
         self._position_estimate_ready = False
         self._first_heartbeat_time = None
         self._last_wait_log_time = 0.0
@@ -673,35 +726,6 @@ def _build_platform_stage_cfg(name: str) -> PlatformMotionStageCfg:
     raise ValueError(f"Unknown motion stage '{name}'")
 
 
-def _load_landing_sway_add_platform_top_decal():
-    module_path = (
-        Path(__file__).resolve().parents[1]
-        / "tasks"
-        / "manager_based"
-        / "landing_sway"
-        / "mdp"
-        / "events.py"
-    )
-    source = module_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source, filename=str(module_path))
-    target_fn = None
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "add_platform_top_decal":
-            target_fn = node
-            break
-    if target_fn is None:
-        raise ImportError(f"Unable to find 'add_platform_top_decal' in '{module_path}'")
-
-    fn_module = ast.Module(body=[target_fn], type_ignores=[])
-    ast.fix_missing_locations(fn_module)
-    namespace: dict[str, object] = {
-        "Path": Path,
-        "Sequence": __import__("typing").Sequence,
-    }
-    exec(compile(fn_module, str(module_path), "exec"), namespace)
-    return namespace["add_platform_top_decal"]
-
-
 class PegasusApp:
     """Standalone app for running multiple PX4 vehicles with ROS 2 velocity command bridges."""
 
@@ -722,8 +746,6 @@ class PegasusApp:
         self.state_publishers = []
         self.px4_backends = []
         self.platform_motion_started = False
-        self._landing_sway_add_platform_top_decal = _load_landing_sway_add_platform_top_decal()
-
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
         atexit.register(self._shutdown)
@@ -736,8 +758,9 @@ class PegasusApp:
             rng_seed=args_cli.platform_seed,
             size=PLATFORM_SIZE,
             base_position=(args_cli.platform_x, args_cli.platform_y, args_cli.platform_z),
-            add_top_decal=False,
+            add_top_decal=True,
         )
+        self._apply_platform_physics_material()
         self.world.add_physics_callback("platform_motion", self._on_platform_physics_step)
         self.platform_publishers = [
             PlatformRos2Publisher(args_cli.namespace, vehicle_id) for vehicle_id in range(args_cli.num_drones)
@@ -748,7 +771,6 @@ class PegasusApp:
 
         self.world.reset()
         self.platform.reset_profile()
-        self._apply_platform_top_decal()
         self._publish_platform_state()
 
     def vehicle_factory(self, vehicle_id: int, gap_x_axis: float):
@@ -809,6 +831,32 @@ class PegasusApp:
             )
         )
 
+    def _apply_platform_physics_material(self):
+        material_path = Sdf.Path("/World/Physics_Materials/platform_physics_material")
+        stage = self.world.stage
+        material = UsdShade.Material.Define(stage, material_path)
+
+        usd_physics_material_api = UsdPhysics.MaterialAPI(material.GetPrim())
+        if not usd_physics_material_api:
+            usd_physics_material_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+        usd_physics_material_api.CreateStaticFrictionAttr(float(args_cli.platform_static_friction))
+        usd_physics_material_api.CreateDynamicFrictionAttr(float(args_cli.platform_dynamic_friction))
+        usd_physics_material_api.CreateRestitutionAttr(float(args_cli.platform_restitution))
+
+        physx_material_api = PhysxSchema.PhysxMaterialAPI(material.GetPrim())
+        if not physx_material_api:
+            physx_material_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
+        physx_material_api.CreateFrictionCombineModeAttr("max")
+        physx_material_api.CreateRestitutionCombineModeAttr("min")
+
+        platform_prim = stage.GetPrimAtPath(self.platform.prim_path)
+        material_binding_api = UsdShade.MaterialBindingAPI(platform_prim)
+        material_binding_api.Bind(
+            material,
+            bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+            materialPurpose="physics",
+        )
+
     def _handle_signal(self, signum, _frame):
         self._signal_count += 1
         if self._signal_count == 1:
@@ -866,21 +914,6 @@ class PegasusApp:
             simulation_app.close()
         except Exception:
             pass
-
-    def _apply_platform_top_decal(self):
-        env_proxy = SimpleNamespace(
-            scene=SimpleNamespace(
-                stage=self.world.stage,
-                env_prim_paths=["/World"],
-            )
-        )
-        self._landing_sway_add_platform_top_decal(
-            env_proxy,
-            None,
-            texture_path=args_cli.platform_texture,
-            platform_name="platform/decal_frame",
-            platform_size=PLATFORM_SIZE,
-        )
 
     def _publish_platform_state(self):
         for platform_publisher in self.platform_publishers:

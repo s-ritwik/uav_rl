@@ -6,6 +6,8 @@ from ..landing_sway.agents.rsl_rl_ppo_cfg import PPORunnerCfg as LandingSwayPPOR
 from ..landing_sway.landing_sway_env_cfg import (
     ActionsCfg as LandingSwayActionsCfg,
     LandingSwayEnvCfg,
+    ObservationsCfg as LandingSwayObservationsCfg,
+    RewardsCfg as LandingSwayRewardsCfg,
     LandingSwaySceneCfg,
     TerminationsCfg as LandingSwayTerminationsCfg,
 )
@@ -22,8 +24,11 @@ class ActionsCfg(LandingSwayActionsCfg):
         asset_name="robot",
         action_scale=(1.0, 1.0, 1.0, 1.0),
         action_offset=(0.0, 0.0, 0.0, 0.0),
-        velocity_limits=(1.2, 1.2, 1.0),
+        velocity_lower_limits=(-1.2, -1.2, -1.0),
+        velocity_upper_limits=(1.2, 1.2, 1.0),
         yaw_rate_limit=3.0,
+        yaw_rate_lower_limit=-3.0,
+        yaw_rate_upper_limit=3.0,
     )
 
 
@@ -59,6 +64,8 @@ class PX4FineTuneLandingSwayEnvCfg(LandingSwayEnvCfg):
     """Landing-sway task executed through PX4 SITL OFFBOARD velocity control."""
 
     scene: LandingSwaySceneCfg = LandingSwaySceneCfg(num_envs=8, env_spacing=20.0)
+    observations: LandingSwayObservationsCfg = LandingSwayObservationsCfg()
+    rewards: LandingSwayRewardsCfg = LandingSwayRewardsCfg()
     actions: ActionsCfg = ActionsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     post_init_cfg: PX4FineTuneLandingSwayPostInitCfg = PX4FineTuneLandingSwayPostInitCfg()

@@ -5,9 +5,34 @@ import math
 from pathlib import Path
 
 import numpy as np
-from omni.isaac.core.objects import DynamicCuboid
+import isaacsim.core.utils.prims as prim_utils
 from pxr import Gf, PhysxSchema, Sdf, UsdGeom, UsdPhysics, UsdShade
 from scipy.spatial.transform import Rotation
+
+
+def _ensure_rgb_texture(texture_path: str | Path) -> str:
+    """Convert grayscale textures to RGB for more reliable USD PreviewSurface sampling."""
+
+    texture_file = Path(texture_path).expanduser().resolve()
+    try:
+        from PIL import Image
+    except Exception:
+        return str(texture_file)
+
+    try:
+        with Image.open(texture_file) as img:
+            if img.mode in ("RGB", "RGBA"):
+                return str(texture_file)
+
+            cache_dir = Path("/tmp/uav_rl_texture_cache")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            rgb_texture_path = cache_dir / f"{texture_file.stem}_rgb.png"
+
+            if not rgb_texture_path.is_file() or rgb_texture_path.stat().st_mtime < texture_file.stat().st_mtime:
+                img.convert("RGB").save(rgb_texture_path)
+            return str(rgb_texture_path)
+    except Exception:
+        return str(texture_file)
 
 
 @dataclass
@@ -271,21 +296,24 @@ class MovingPlatform:
         self.current_state: PlatformState | None = None
         self._sim_time = 0.0
 
-        self.prim = self.world.scene.add(
-            DynamicCuboid(
-                prim_path=self.prim_path,
-                name="platform",
-                position=np.asarray(self.base_position, dtype=np.float32),
-                orientation=np.asarray((1.0, 0.0, 0.0, 0.0), dtype=np.float32),
-                scale=np.asarray(self.size, dtype=np.float32),
-                size=1.0,
-                color=np.asarray((0.28, 0.28, 0.28), dtype=np.float32),
-                mass=1.0,
-            )
+        prim_utils.create_prim(
+            self.prim_path,
+            "Cube",
+            position=self.base_position,
+            scale=self.size,
+            attributes={
+                "size": 1.0,
+                "primvars:displayColor": [(0.28, 0.28, 0.28)],
+            },
         )
 
         stage_prim = self.world.stage.GetPrimAtPath(self.prim_path)
         self._stage_prim = stage_prim
+        collision_api = UsdPhysics.CollisionAPI.Apply(stage_prim)
+        if not collision_api.GetCollisionEnabledAttr().IsValid():
+            collision_api.CreateCollisionEnabledAttr(True)
+        collision_api.GetCollisionEnabledAttr().Set(True)
+
         rigid_body_api = UsdPhysics.RigidBodyAPI(stage_prim)
         if not rigid_body_api.GetKinematicEnabledAttr().IsValid():
             rigid_body_api.CreateKinematicEnabledAttr(True)
@@ -304,23 +332,6 @@ class MovingPlatform:
         self._orient_op = ordered_ops.get("xformOp:orient")
         if self._orient_op is None:
             self._orient_op = xformable.AddOrientOp()
-        self._decal_frame_path = f"{self.prim_path}/decal_frame"
-        decal_frame = UsdGeom.Xform.Define(self.world.stage, self._decal_frame_path)
-        decal_frame_xform = UsdGeom.Xformable(decal_frame.GetPrim())
-        decal_scale_op = None
-        for op in decal_frame_xform.GetOrderedXformOps():
-            if op.GetOpName() == "xformOp:scale":
-                decal_scale_op = op
-                break
-        if decal_scale_op is None:
-            decal_scale_op = decal_frame_xform.AddScaleOp()
-        decal_scale_op.Set(
-            Gf.Vec3f(
-                float(1.0 / max(self.size[0], 1.0e-6)),
-                float(1.0 / max(self.size[1], 1.0e-6)),
-                float(1.0 / max(self.size[2], 1.0e-6)),
-            )
-        )
 
         if add_top_decal:
             self._add_top_decal()
@@ -340,7 +351,6 @@ class MovingPlatform:
     def _apply_state(self, state: PlatformState) -> None:
         # Match the vanilla task's kinematic-platform pattern: PhysX owns the collision body,
         # while the motion profile remains the source of truth for platform velocity.
-        self.prim.set_world_pose(position=state.position, orientation=state.quat_wxyz)
         self._translate_op.Set(Gf.Vec3d(float(state.position[0]), float(state.position[1]), float(state.position[2])))
         self._orient_op.Set(
             Gf.Quatd(
@@ -350,7 +360,7 @@ class MovingPlatform:
         )
 
     def _add_top_decal(self) -> None:
-        texture_file = Path(self.texture_path)
+        texture_file = Path(_ensure_rgb_texture(self.texture_path))
         if not texture_file.is_file():
             print(
                 "[WARN][transfer] Platform texture PNG not found at "
@@ -359,12 +369,10 @@ class MovingPlatform:
             return
 
         stage = self.world.stage
-        # The cube geometry is unit-sized in local coordinates and the parent prim carries the scale.
+        # Mirror the Pegasus example: local top face sits at +0.5 on the unit cube.
         half_x = 0.5
         half_y = 0.5
-        # Keep the world-space offset above the top face large enough to avoid z-fighting.
-        local_decal_z_offset = 5.0e-4 / max(self.size[2], 1.0e-6)
-        top_z = 0.5 + local_decal_z_offset
+        top_z = 0.5005
 
         decal_mesh_path = Sdf.Path(f"{self.prim_path}/top_decal")
         decal_mesh = UsdGeom.Mesh.Define(stage, decal_mesh_path)

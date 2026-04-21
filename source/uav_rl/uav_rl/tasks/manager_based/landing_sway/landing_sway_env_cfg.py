@@ -44,12 +44,33 @@ class LandingSwaySceneCfg(InteractiveSceneCfg):
         track_air_time=False,
     )
 
+    # platform = RigidObjectCfg(
+    #     prim_path="{ENV_REGEX_NS}/platform",
+    #     spawn=sim_utils.CuboidCfg(
+    #         size=(1.0, 1.0, 0.2),
+    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
+    #         collision_props=sim_utils.CollisionPropertiesCfg(),
+    #         visual_material=sim_utils.PreviewSurfaceCfg(
+    #             diffuse_color=(0.28, 0.28, 0.28),
+    #             roughness=0.4,
+    #             metallic=0.0,
+    #         ),
+    #     ),
+    #     init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.1), rot=(1.0, 0.0, 0.0, 0.0)),
+    # )
     platform = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/platform",
         spawn=sim_utils.CuboidCfg(
             size=(1.0, 1.0, 0.2),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=4.0,
+                dynamic_friction=4.0,
+                restitution=0.0,
+                friction_combine_mode="max",
+                restitution_combine_mode="min",
+            ),
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.28, 0.28, 0.28),
                 roughness=0.4,
@@ -58,7 +79,6 @@ class LandingSwaySceneCfg(InteractiveSceneCfg):
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.1), rot=(1.0, 0.0, 0.0, 0.0)),
     )
-
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=2000.0),
@@ -134,6 +154,7 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("platform"),
             # Swap this preset as training progresses: XY -> deck attitude -> heave.
             "stage_cfg": PLATFORM_STAGE_TRACK_XY_CFG,
+            "stationary_env_probability": 0.0,
         },
     )
 
@@ -213,12 +234,15 @@ class RewardsCfg:
     # Stabilize around the hover setpoint.
     horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.08)
     vertical_speed = RewTerm(func=mdp.vertical_speed_l2, weight=-0.08)
+    velocity_action_rate = RewTerm(func=mdp.velocity_action_rate_l2, weight=0.0)
     uav_acceleration = RewTerm(
         func=mdp.uav_linear_acceleration_l2,
         weight=0.0,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=["body"])},
     )
     angular_rate = RewTerm(func=mdp.angular_rate_l2, weight=-0.05)
+    angular_velocity_rate = RewTerm(func=mdp.angular_velocity_rate_l2, weight=0.0)
+    angular_rate_xy = RewTerm(func=mdp.angular_rate_xy_l2, weight=0.0)
     yaw_rate_error = RewTerm(
         func=mdp.yaw_rate_error_l2,
         weight=-0.05,

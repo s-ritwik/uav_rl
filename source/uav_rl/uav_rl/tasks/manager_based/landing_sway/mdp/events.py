@@ -200,6 +200,7 @@ class MultiSinePlatformMotion(ManagerTermBase):
         super().__init__(cfg, env)
         self.asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.stage_cfg: PlatformMotionStageCfg = cfg.params["stage_cfg"]
+        self.stationary_env_probability = float(cfg.params.get("stationary_env_probability", 0.0))
         self.platform: RigidObject = env.scene[self.asset_cfg.name]
 
         self._max_terms = max(
@@ -215,6 +216,7 @@ class MultiSinePlatformMotion(ManagerTermBase):
         self._omegas = torch.zeros(shape, device=self.device)
         self._phases = torch.zeros(shape, device=self.device)
         self._bias = torch.zeros((self.num_envs, len(self._CHANNEL_NAMES)), device=self.device)
+        self._stationary_env_mask = torch.zeros((self.num_envs,), device=self.device, dtype=torch.bool)
 
         self.reset()
 
@@ -227,11 +229,22 @@ class MultiSinePlatformMotion(ManagerTermBase):
         self._omegas[env_ids_tensor] = 0.0
         self._phases[env_ids_tensor] = 0.0
         self._bias[env_ids_tensor] = 0.0
+        self._stationary_env_mask[env_ids_tensor] = False
+
+        if self.stationary_env_probability > 0.0:
+            stationary_draw = torch.rand(env_ids_tensor.numel(), device=self.device) < self.stationary_env_probability
+            self._stationary_env_mask[env_ids_tensor] = stationary_draw
 
         for channel_id, channel_name in enumerate(self._CHANNEL_NAMES):
             self._sample_channel(env_ids_tensor, channel_id, getattr(self.stage_cfg, channel_name))
 
         self._apply_stage_limits(env_ids_tensor)
+        stationary_env_ids = env_ids_tensor[self._stationary_env_mask[env_ids_tensor]]
+        if stationary_env_ids.numel() > 0:
+            self._amplitudes[stationary_env_ids] = 0.0
+            self._omegas[stationary_env_ids] = 0.0
+            self._phases[stationary_env_ids] = 0.0
+            self._bias[stationary_env_ids] = 0.0
         self._write_motion_to_sim(env_ids_tensor, self._current_time_s())
 
     def __call__(
@@ -240,8 +253,9 @@ class MultiSinePlatformMotion(ManagerTermBase):
         env_ids: Sequence[int] | torch.Tensor | slice | None,
         asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
         stage_cfg: PlatformMotionStageCfg | None = None,
+        stationary_env_probability: float | None = None,
     ) -> None:
-        del env, asset_cfg, stage_cfg
+        del env, asset_cfg, stage_cfg, stationary_env_probability
         env_ids_tensor = self._resolve_env_ids(env_ids)
         if env_ids_tensor.numel() == 0:
             return

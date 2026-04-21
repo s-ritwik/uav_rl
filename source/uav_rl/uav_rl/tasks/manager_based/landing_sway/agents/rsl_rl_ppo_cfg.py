@@ -6,7 +6,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 @configclass
 class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 4000
+    max_iterations = 2000
     save_interval = 100
     experiment_name = "landing_sway"
     obs_groups = {"policy": ["policy"], "critic": ["policy"]}
@@ -15,23 +15,21 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         noise_std_type="log",
         actor_obs_normalization=False,
         critic_obs_normalization=False,
-        actor_hidden_dims=[128, 128, 64],
         critic_hidden_dims=[128, 128, 64],
-        # actor_hidden_dims=[128, 64],
-        # critic_hidden_dims=[128, 64],
+        actor_hidden_dims=[128, 64],
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
-        clip_param=0.2, #0.2
-        entropy_coef=5e-3,#0.01
+        clip_param=0.2,
+        entropy_coef=5e-3,
         num_learning_epochs=5,
         num_mini_batches=4,
-        learning_rate=1.0e-4,#5e-4
+        learning_rate=1.0e-4,
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=1e-2, #0.01
+        desired_kl=1e-2,
         max_grad_norm=1.0,
     )

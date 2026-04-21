@@ -165,6 +165,11 @@ def uav_linear_acceleration_l2(
     return torch.sum(torch.norm(asset.data.body_lin_acc_w[:, asset_cfg.body_ids, :], dim=-1), dim=1)
 
 
+def velocity_action_rate_l2(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """Penalize step-to-step change in commanded vx, vy, vz only."""
+    return torch.sum(torch.square(env.action_manager.action[:, :3] - env.action_manager.prev_action[:, :3]), dim=1)
+
+
 def touchdown_quality_reward(
     env: "ManagerBasedRLEnv",
     max_touchdown_speed_mps: float = 0.25,
@@ -251,6 +256,37 @@ def angular_rate_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneE
     return torch.sum(torch.square(asset.data.root_ang_vel_b), dim=1)
 
 
+def angular_velocity_rate_l2(
+    env: "ManagerBasedRLEnv",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize step-to-step change in measured body-frame angular velocity wx, wy, wz."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    current_ang_vel_b = asset.data.root_ang_vel_b
+
+    state_name = "_landing_sway_prev_root_ang_vel_b"
+    prev_ang_vel_b = getattr(env, state_name, None)
+    if prev_ang_vel_b is None or prev_ang_vel_b.shape != current_ang_vel_b.shape:
+        setattr(env, state_name, current_ang_vel_b.clone())
+        return torch.zeros(env.num_envs, device=env.device, dtype=current_ang_vel_b.dtype)
+
+    delta = current_ang_vel_b - prev_ang_vel_b
+
+    # Do not penalize the first step after reset where the previous-state buffer is stale by construction.
+    fresh_envs = env.episode_length_buf <= 1
+    delta = delta.clone()
+    delta[fresh_envs] = 0.0
+
+    prev_ang_vel_b.copy_(current_ang_vel_b)
+    return torch.sum(torch.square(delta), dim=1)
+
+
+def angular_rate_xy_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Penalize body-frame roll/pitch rates only."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    return torch.sum(torch.square(asset.data.root_ang_vel_b[:, :2]), dim=1)
+
+
 def yaw_rate_error_l2(
     env: "ManagerBasedRLEnv",
     target_yaw_rate: float = 0.0,
@@ -275,6 +311,5 @@ def yaw_error_l2(
     y = quat_wxyz[:, 2]
     z = quat_wxyz[:, 3]
     yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-    # _, _, yaw = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
     yaw_error = torch.atan2(torch.sin(yaw - target_yaw), torch.cos(yaw - target_yaw))
     return torch.square(yaw_error)

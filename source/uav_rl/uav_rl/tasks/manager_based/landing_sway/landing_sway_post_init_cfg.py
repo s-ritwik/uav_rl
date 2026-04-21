@@ -20,26 +20,32 @@ class LandingSwayRewardWeightsCfg:
     # mdp.failure_termination_penalty: scales failure penalty value 
     terminated: float = 50.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination 
-    touchdown_terminated: float = 20.0
+    touchdown_terminated: float = 50.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
     position_track: float = 20.0
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
     # pushes agent to land
-    vertical_clearance_excess: float = -0.0
+    vertical_clearance_excess: float = -.50
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.01
+    # mdp.velocity_action_rate_l2:Continuity error penalize step-to-step change in commanded vx, vy, vz.
+    velocity_action_rate: float = -0.5
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
     uav_acceleration: float = -0.5
     # mdp.angular_rate_l2: penalize body angular rates.
     angular_rate: float = -0.5
+    # mdp.angular_velocity_rate_l2: Continuity error :penalize step-to-step change in measured body-frame wx, wy, wz.
+    angular_velocity_rate: float = -0.1
+    # mdp.angular_rate_xy_l2: penalize body-frame roll/pitch rates only.
+    angular_rate_xy: float = -1.0#0.0
     # mdp.yaw_rate_error_l2: penalize body-frame yaw-rate error around target yaw rate.
     yaw_rate_error: float = -10.0
     # mdp.yaw_error_l2: penalize yaw error to target yaw.
-    yaw_error: float = -1.0
+    yaw_error: float = -2.0
     # mdp.flat_orientation_l2: penalize tilt from upright.
     upright: float = -10.0
     # mdp.touchdown_quality_reward multiplier. Keep 1.0 when using explicit good/bad touchdown values below.
@@ -89,7 +95,7 @@ class LandingSwayVerticalClearanceCfg:
     """Linear vertical-clearance penalty threshold."""
 
     # Penalty activates when z_clearance > threshold_m.
-    threshold_m: float = 1.0
+    threshold_m: float = 0.5
 
 
 @configclass
@@ -274,6 +280,7 @@ class LandingSwayPlatformMotionCfg:
 
     placement: LandingSwayPlatformPlacementCfg = LandingSwayPlatformPlacementCfg()
     stage_cfg: mdp.PlatformMotionStageCfg = PLATFORM_STAGE_TRACK_XY_CFG
+    stationary_env_probability: float = 0.1
 
 
 @configclass
@@ -339,6 +346,9 @@ class LandingSwayPostInitCfg:
         env_cfg.scene.platform.init_state.pos = self.platform_motion.placement.pos
         env_cfg.scene.platform.init_state.rot = self.platform_motion.placement.rot
         env_cfg.events.move_platform.params["stage_cfg"] = self.platform_motion.stage_cfg
+        env_cfg.events.move_platform.params["stationary_env_probability"] = float(
+            self.platform_motion.stationary_env_probability
+        )
 
         env_cfg.events.reset_root.params["pose_range"] = self.reset_spawn.pose_range.as_dict()
         env_cfg.events.reset_root.params["velocity_range"] = self.reset_spawn.velocity_range.as_dict()
@@ -352,8 +362,11 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.vertical_clearance_excess.weight = self.reward_weights.vertical_clearance_excess
         env_cfg.rewards.horizontal_speed.weight = self.reward_weights.horizontal_speed
         env_cfg.rewards.vertical_speed.weight = self.reward_weights.vertical_speed
+        env_cfg.rewards.velocity_action_rate.weight = self.reward_weights.velocity_action_rate
         env_cfg.rewards.uav_acceleration.weight = self.reward_weights.uav_acceleration
         env_cfg.rewards.angular_rate.weight = self.reward_weights.angular_rate
+        env_cfg.rewards.angular_velocity_rate.weight = self.reward_weights.angular_velocity_rate
+        env_cfg.rewards.angular_rate_xy.weight = self.reward_weights.angular_rate_xy
         env_cfg.rewards.yaw_rate_error.weight = self.reward_weights.yaw_rate_error
         env_cfg.rewards.yaw_error.weight = self.reward_weights.yaw_error
         env_cfg.rewards.upright.weight = self.reward_weights.upright

@@ -9,6 +9,10 @@ def cmd_vel_topic(namespace: str, vehicle_id: int) -> str:
     return f"{vehicle_namespace(namespace, vehicle_id)}/cmd_vel"
 
 
+def disarm_topic(namespace: str, vehicle_id: int) -> str:
+    return f"{vehicle_namespace(namespace, vehicle_id)}/policy_cmd/disarm"
+
+
 def pose_topic(namespace: str, vehicle_id: int) -> str:
     return f"{vehicle_namespace(namespace, vehicle_id)}/state/pose"
 

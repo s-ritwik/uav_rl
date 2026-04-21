@@ -20,6 +20,7 @@ DEFAULT_TOPIC_SUFFIXES = {
     "cmd_vel": "/cmd_vel",
     "velocity_cmd": "/policy_cmd/velocity",
     "yaw_rate_cmd": "/policy_cmd/yaw_rate",
+    "disarm_cmd": "/policy_cmd/disarm",
 }
 
 
@@ -46,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vehicle-id", type=int, default=0, help="Vehicle id suffix used in ROS topics.")
     parser.add_argument("--policy-rate-hz", type=float, default=25.0, help="Policy inference rate.")
     parser.add_argument("--cmd-publish-rate-hz", type=float, default=25.0, help="Rate for publishing cmd_vel.")
-    parser.add_argument("--policy-jit", type=str, default=None, help="Path to exported policy.pt.")
+    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-21_10-33-28_landing_sway_2.6.3/exported/policy.pt", help="Path to exported policy.pt.")
     parser.add_argument("--checkpoint-path", type=str, default=None, help="Path to an RSL-RL checkpoint file.")
     parser.add_argument(
         "--load-run",
@@ -61,14 +62,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vehicle-z0-m",
         type=float,
-        default=0.053,
+        default=0.15,
         help="Constant landing-gear/root offset subtracted from relative z to match landing_sway observations.",
     )
     parser.add_argument("--velocity-limit-x", type=float, default=1.2)
     parser.add_argument("--velocity-limit-y", type=float, default=1.2)
     parser.add_argument("--velocity-limit-z", type=float, default=1.0)
     parser.add_argument("--yaw-rate-limit", type=float, default=3.0)
-    parser.add_argument("--debug-every", type=int, default=0, help="Print action debug every N policy steps.")
+    parser.add_argument(
+        "--enable-proximity-disarm",
+        type=int,
+        default=1,
+        help="If 1, trigger disarm when relative |x|,|y|,|z| are below thresholds.",
+    )
+    parser.add_argument("--disarm-rel-x-threshold", type=float, default=0.8)
+    parser.add_argument("--disarm-rel-y-threshold", type=float, default=0.8)
+    parser.add_argument("--disarm-rel-z-threshold", type=float, default=0.15)
+    parser.add_argument("--disarm-via-service", type=int, default=1)
+    parser.add_argument("--mavros-ns", type=str, default="/mavros")
+    parser.add_argument("--disarm-service-timeout", type=float, default=0.25)
+    parser.add_argument("--disarm-service-attempts", type=int, default=1)
+    parser.add_argument("--disarm-response-timeout", type=float, default=0.3)
+    parser.add_argument("--disarm-fire-and-forget", type=int, default=0)
+    parser.add_argument("--post-disarm-hold-seconds", type=float, default=5.0)
+    parser.add_argument("--debug-every", type=int, default=1, help="Print action debug every N policy steps.")
     parser.add_argument("--robot-pose-topic", type=str, default=None, help="ROS topic for robot pose input.")
     parser.add_argument(
         "--robot-twist-body-topic",
@@ -101,6 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Separate Float32 yaw-rate output topic.",
+    )
+    parser.add_argument(
+        "--disarm-cmd-topic",
+        type=str,
+        default=None,
+        help="Local Bool disarm output topic used by the transfer PX4 stack.",
     )
     return parser
 
@@ -161,10 +184,15 @@ def _run(args) -> None:
 
         import rclpy
 
+    from rclpy.executors import ExternalShutdownException
     import torch
     from geometry_msgs.msg import PoseStamped, Twist, TwistStamped, Vector3Stamped
+    try:
+        from mavros_msgs.srv import CommandLong
+    except ImportError:
+        CommandLong = None
     from scipy.spatial.transform import Rotation
-    from std_msgs.msg import Float32
+    from std_msgs.msg import Bool, Float32
 
     try:
         from .policy import RslRlPolicy, resolve_checkpoint_path
@@ -178,6 +206,7 @@ def _run(args) -> None:
             except Exception:
                 pass
 
+            self.start_time = time.monotonic()
             self.node = rclpy.create_node(f"rl_landing_publisher_{args.vehicle_id}")
             self.robot_pose_topic = args.robot_pose_topic or _default_topic(args.namespace, args.vehicle_id, "robot_pose")
             self.robot_twist_body_topic = args.robot_twist_body_topic or _default_topic(
@@ -199,10 +228,14 @@ def _run(args) -> None:
             self.yaw_rate_cmd_topic = args.yaw_rate_cmd_topic or _default_topic(
                 args.namespace, args.vehicle_id, "yaw_rate_cmd"
             )
+            self.disarm_cmd_topic = args.disarm_cmd_topic or _default_topic(
+                args.namespace, args.vehicle_id, "disarm_cmd"
+            )
 
             self.cmd_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
             self.velocity_cmd_pub = self.node.create_publisher(Vector3Stamped, self.velocity_cmd_topic, 10)
             self.yaw_rate_cmd_pub = self.node.create_publisher(Float32, self.yaw_rate_cmd_topic, 10)
+            self.disarm_cmd_pub = self.node.create_publisher(Bool, self.disarm_cmd_topic, 10)
 
             self.pose_sub = self.node.create_subscription(
                 PoseStamped, self.robot_pose_topic, self._pose_callback, 10
@@ -245,7 +278,19 @@ def _run(args) -> None:
             )
             self.yaw_rate_limit = float(args.yaw_rate_limit)
             self.vehicle_z0_m = float(args.vehicle_z0_m)
-            self.last_action = np.zeros((4,), dtype=np.float32)
+            self.enable_proximity_disarm = bool(args.enable_proximity_disarm)
+            self.disarm_rel_x_threshold = float(args.disarm_rel_x_threshold)
+            self.disarm_rel_y_threshold = float(args.disarm_rel_y_threshold)
+            self.disarm_rel_z_threshold = float(args.disarm_rel_z_threshold)
+            self.disarm_via_service = bool(args.disarm_via_service)
+            self.mavros_ns = str(args.mavros_ns)
+            self.disarm_service_timeout = float(args.disarm_service_timeout)
+            self.disarm_service_attempts = int(args.disarm_service_attempts)
+            self.disarm_response_timeout = float(args.disarm_response_timeout)
+            self.disarm_fire_and_forget = bool(args.disarm_fire_and_forget)
+            self.post_disarm_hold_seconds = float(args.post_disarm_hold_seconds)
+            self.last_obs_action = np.zeros((4,), dtype=np.float32)
+            self.last_cmd_action = np.zeros((4,), dtype=np.float32)
 
             self.robot_pos = None
             self.robot_quat_xyzw = None
@@ -261,8 +306,22 @@ def _run(args) -> None:
             self.last_policy_time = 0.0
             self.policy_period = 1.0 / max(args.policy_rate_hz, 1.0)
             self._warned_unready = False
+            self._proximity_disarm_done = False
+            self.done_enter_time = None
+            self.disarm_time = None
+            self._stopped = False
 
-            self.node.get_logger().info(
+            self.cmd_long_cli = None
+            if self.enable_proximity_disarm and self.disarm_via_service:
+                if CommandLong is None:
+                    self._log_warn(
+                        "mavros_msgs.srv.CommandLong is unavailable; disabling service-based disarm."
+                    )
+                    self.disarm_via_service = False
+                else:
+                    self.cmd_long_cli = self.node.create_client(CommandLong, f"{self.mavros_ns}/cmd/command")
+
+            self._log_info(
                 "RL landing publisher topics: "
                 f"robot_pose='{self.robot_pose_topic}', "
                 f"robot_twist_body='{self.robot_twist_body_topic}', "
@@ -271,8 +330,32 @@ def _run(args) -> None:
                 f"platform_twist='{self.platform_twist_topic}', "
                 f"cmd_vel_out='{self.cmd_vel_topic}', "
                 f"velocity_out='{self.velocity_cmd_topic}', "
-                f"yaw_rate_out='{self.yaw_rate_cmd_topic}'"
+                f"yaw_rate_out='{self.yaw_rate_cmd_topic}', "
+                f"disarm_out='{self.disarm_cmd_topic}'\n"
+                "Proximity disarm: "
+                f"enabled={self.enable_proximity_disarm}, "
+                f"thresholds=({self.disarm_rel_x_threshold:.3f}, "
+                f"{self.disarm_rel_y_threshold:.3f}, {self.disarm_rel_z_threshold:.3f}), "
+                f"service={self.disarm_via_service}, "
+                f"mavros_ns='{self.mavros_ns}'"
             )
+
+        def _elapsed_seconds(self) -> float:
+            return time.monotonic() - self.start_time
+
+        def _log(self, level: str, message: str) -> None:
+            stream = sys.stderr if level == "WARN" else sys.stdout
+            print(
+                f"[{self._elapsed_seconds():8.3f}s] [{level}] [{self.node.get_name()}]: {message}",
+                file=stream,
+                flush=True,
+            )
+
+        def _log_info(self, message: str) -> None:
+            self._log("INFO", message)
+
+        def _log_warn(self, message: str) -> None:
+            self._log("WARN", message)
 
         def _pose_callback(self, msg: PoseStamped):
             self.robot_pos = np.array(
@@ -337,20 +420,19 @@ def _run(args) -> None:
 
         def _build_observation(self) -> np.ndarray:
             robot_rot = Rotation.from_quat(self.robot_quat_xyzw)
-            platform_rot = Rotation.from_quat(self.platform_quat_xyzw)
 
             # Observation order must match landing_sway/PolicyCfg exactly:
             # rel_pos, rel_lin_vel, rel_quat, rel_ang_vel, projected_gravity, last_action.
-            rel_pos = platform_rot.inv().apply(self.robot_pos - self.platform_pos)
+            rel_pos = (self.robot_pos - self.platform_pos).astype(np.float32)
             rel_pos[2] -= self.vehicle_z0_m
 
-            rel_lin_vel = platform_rot.inv().apply(self.robot_lin_vel_w - self.platform_lin_vel_w)
-            rel_quat_xyzw = (platform_rot.inv() * robot_rot).as_quat()
+            rel_lin_vel = (self.robot_lin_vel_w - self.platform_lin_vel_w).astype(np.float32)
+            rel_quat_wxyz = _quat_xyzw_to_wxyz(self.robot_quat_xyzw.astype(np.float32))
 
             # Robot angular velocity is received in robot body frame. Convert to world,
-            # subtract platform world angular velocity, then express the result in platform frame.
+            # then subtract platform world angular velocity without additional frame rotation.
             robot_ang_vel_w = robot_rot.apply(self.robot_ang_vel_b)
-            rel_ang_vel = platform_rot.inv().apply(robot_ang_vel_w - self.platform_ang_vel_w)
+            rel_ang_vel = (robot_ang_vel_w - self.platform_ang_vel_w).astype(np.float32)
 
             # landing_sway uses robot projected gravity in body frame.
             projected_gravity = robot_rot.inv().apply(np.array([0.0, 0.0, -1.0], dtype=np.float32))
@@ -359,12 +441,112 @@ def _run(args) -> None:
                 (
                     rel_pos.astype(np.float32),
                     rel_lin_vel.astype(np.float32),
-                    _quat_xyzw_to_wxyz(rel_quat_xyzw.astype(np.float32)),
+                    rel_quat_wxyz.astype(np.float32),
                     rel_ang_vel.astype(np.float32),
                     projected_gravity.astype(np.float32),
-                    self.last_action,
+                    self.last_obs_action,
                 )
             )
+
+        def _compute_rel_pos_world(self) -> np.ndarray | None:
+            if self.robot_pos is None or self.platform_pos is None:
+                return None
+            rel_pos = (self.robot_pos - self.platform_pos).astype(np.float32)
+            rel_pos[2] -= self.vehicle_z0_m
+            return rel_pos
+
+        def _check_and_trigger_proximity_disarm(self, now_sec: float) -> None:
+            if not self.enable_proximity_disarm or self._proximity_disarm_done:
+                return
+            rel_pos = self._compute_rel_pos_world()
+            if rel_pos is None:
+                return
+
+            ax, ay, az = float(abs(rel_pos[0])), float(abs(rel_pos[1])), float(abs(rel_pos[2]))
+            if ax <= self.disarm_rel_x_threshold and ay <= self.disarm_rel_y_threshold and az <= self.disarm_rel_z_threshold:
+                self._log_warn(
+                    "Proximity disarm trigger met: "
+                    f"|rel_x|={ax:.3f}, |rel_y|={ay:.3f}, |rel_z|={az:.3f}"
+                )
+                if self.done_enter_time is None:
+                    self.done_enter_time = now_sec
+                if self._try_force_disarm():
+                    if self.disarm_time is None:
+                        self.disarm_time = now_sec
+                    self._proximity_disarm_done = True
+
+        def _try_force_disarm(self) -> bool:
+            if not self.disarm_via_service or self.cmd_long_cli is None:
+                self._publish_local_disarm()
+                return True
+
+            for attempt in range(self.disarm_service_attempts):
+                if self.cmd_long_cli.wait_for_service(timeout_sec=self.disarm_service_timeout):
+                    break
+                self._log_warn(
+                    f"Waiting for CommandLong service (attempt {attempt + 1}/{self.disarm_service_attempts})"
+                )
+            else:
+                self._log_warn("CommandLong service not available; falling back to local disarm topic")
+                self._publish_local_disarm()
+                return True
+
+            req = CommandLong.Request()
+            req.broadcast = False
+            req.command = 400
+            req.confirmation = 0
+            req.param1 = 0.0
+            req.param2 = 21196.0
+            req.param3 = 0.0
+            req.param4 = 0.0
+            req.param5 = 0.0
+            req.param6 = 0.0
+            req.param7 = 0.0
+
+            future = self.cmd_long_cli.call_async(req)
+            if self.disarm_fire_and_forget:
+                future.add_done_callback(self._on_force_disarm_response)
+                self._log_warn("Sent MAV_CMD_COMPONENT_ARM_DISARM (force disarm, fire-and-forget)")
+                return True
+
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=self.disarm_response_timeout)
+            if future.done():
+                return self._on_force_disarm_response(future)
+            else:
+                self._log_warn("Force disarm timed out with no response")
+                return False
+
+        def _on_force_disarm_response(self, future) -> bool:
+            try:
+                resp = future.result()
+                if resp and bool(resp.success):
+                    self._log_warn(f"Force disarm accepted (result={resp.result})")
+                    return True
+                else:
+                    self._log_warn(f"Force disarm failed (resp={resp})")
+                    return False
+            except Exception as exc:
+                self._log_warn(f"Force disarm call error: {exc}")
+                return False
+
+        def _publish_local_disarm(self) -> None:
+            msg = Bool()
+            msg.data = True
+            self.disarm_cmd_pub.publish(msg)
+            self._log_warn(
+                f"Published local disarm request on '{self.disarm_cmd_topic}'"
+            )
+
+        def _stop_node(self, reason: str) -> None:
+            if self._stopped:
+                return
+            self._stopped = True
+            self._log_info(reason)
+            try:
+                self.timer.cancel()
+            except Exception:
+                pass
+            raise ExternalShutdownException()
 
         def _publish_cmd(self, world_velocity_sp: np.ndarray, yaw_rate_sp: float):
             msg = Twist()
@@ -389,37 +571,50 @@ def _run(args) -> None:
             now = time.monotonic()
             if not self._ready():
                 if not self._warned_unready:
-                    self.node.get_logger().info(
+                    self._log_info(
                         "Waiting for robot/platform pose and twist topics before activating the landing policy."
                     )
                     self._warned_unready = True
                 return
 
             self._warned_unready = False
+            self._check_and_trigger_proximity_disarm(now)
+            if self._proximity_disarm_done:
+                self.last_obs_action[:] = 0.0
+                self.last_cmd_action[:] = 0.0
+                self._publish_cmd(self.last_cmd_action[:3], float(self.last_cmd_action[3]))
+                ref_time = self.disarm_time if self.disarm_time is not None else self.done_enter_time
+                if ref_time is not None and (now - ref_time) >= self.post_disarm_hold_seconds:
+                    self._stop_node("Landing completed; shutting down node.")
+                return
 
             if now - self.last_policy_time >= self.policy_period:
                 obs = self._build_observation()
                 obs_tensor = torch.from_numpy(obs).to(self.device).unsqueeze(0)
                 with torch.inference_mode():
-                    action = self.policy.act(obs_tensor)[0].detach().cpu().numpy().astype(np.float32)
+                    raw_action = self.policy.act(obs_tensor)[0].detach().cpu().numpy().astype(np.float32)
 
-                action[:3] = np.clip(action[:3], -self.velocity_limits, self.velocity_limits)
-                action[3] = float(np.clip(action[3], -self.yaw_rate_limit, self.yaw_rate_limit))
-                self.last_action = action
+                cmd_action = raw_action.copy()
+                cmd_action[:3] = np.clip(cmd_action[:3], -self.velocity_limits, self.velocity_limits)
+                cmd_action[3] = float(np.clip(cmd_action[3], -self.yaw_rate_limit, self.yaw_rate_limit))
+                self.last_obs_action = raw_action
+                self.last_cmd_action = cmd_action
                 self.last_policy_time = now
                 self.step_count += 1
 
                 if args.debug_every > 0 and self.step_count % args.debug_every == 0:
-                    self.node.get_logger().info(
+                    self._log_info(
                         f"policy_step={self.step_count} obs_z={float(obs[2]):.3f} "
-                        f"vel_sp={self.last_action[:3].tolist()} yaw_rate={float(self.last_action[3]):.3f}"
+                        f"vel_sp={self.last_cmd_action[:3].tolist()} yaw_rate={float(self.last_cmd_action[3]):.3f}"
                     )
 
-            self._publish_cmd(self.last_action[:3], float(self.last_action[3]))
+            self._publish_cmd(self.last_cmd_action[:3], float(self.last_cmd_action[3]))
 
         def run(self):
             try:
                 rclpy.spin(self.node)
+            except ExternalShutdownException:
+                pass
             except KeyboardInterrupt:
                 pass
             finally:
