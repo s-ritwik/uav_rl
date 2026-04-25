@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
+import queue
 import sys
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -47,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vehicle-id", type=int, default=0, help="Vehicle id suffix used in ROS topics.")
     parser.add_argument("--policy-rate-hz", type=float, default=25.0, help="Policy inference rate.")
     parser.add_argument("--cmd-publish-rate-hz", type=float, default=25.0, help="Rate for publishing cmd_vel.")
-    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-21_13-43-23_landing_sway_2.7.0/exported/policy.pt", help="Path to exported policy.pt.")
+    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-24_15-08-44_landing_sway_2.8.3/exported/policy.pt", help="Path to exported policy.pt.")
     parser.add_argument("--checkpoint-path", type=str, default=None, help="Path to an RSL-RL checkpoint file.")
     parser.add_argument(
         "--load-run",
@@ -93,6 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disarm-response-timeout", type=float, default=0.3)
     parser.add_argument("--disarm-fire-and-forget", type=int, default=0)
     parser.add_argument("--post-disarm-hold-seconds", type=float, default=5.0)
+    parser.add_argument("--enable-csv", type=int, default=1, help="Enable CSV logging for policy steps.")
+    parser.add_argument("--enable-async-logging", type=int, default=1)
+    parser.add_argument("--log-queue-size", type=int, default=4096)
+    parser.add_argument("--log-flush-period-s", type=float, default=0.5)
+    parser.add_argument(
+        "--csv-log-dir",
+        type=str,
+        default=None,
+        help="Directory for CSV logs. Defaults to --log-root if unset.",
+    )
     parser.add_argument("--debug-every", type=int, default=1, help="Print action debug every N policy steps.")
     parser.add_argument("--robot-pose-topic", type=str, default=None, help="ROS topic for robot pose input.")
     parser.add_argument(
@@ -100,6 +114,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="ROS topic for robot body-frame angular velocity input.",
+    )
+    parser.add_argument(
+        "--robot-twist-body-msg-type",
+        type=str,
+        choices=("auto", "twist", "imu"),
+        default="auto",
+        help="Message type used by --robot-twist-body-topic. 'auto' selects IMU for topics containing '/imu/'.",
     )
     parser.add_argument(
         "--robot-twist-inertial-topic",
@@ -149,6 +170,15 @@ def _quat_xyzw_to_wxyz(quat_xyzw: np.ndarray) -> np.ndarray:
     return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=np.float32)
 
 
+def _resolve_robot_twist_body_msg_type(topic: str, requested: str) -> str:
+    if requested != "auto":
+        return requested
+    topic_lower = topic.lower()
+    if "/imu/" in topic_lower or topic_lower.endswith("/imu") or topic_lower.endswith("/imu/data"):
+        return "imu"
+    return "twist"
+
+
 def _ensure_ros_runtime_env() -> None:
     sentinel = "_UAV_RL_TRANSFER_ROS_ENV"
     desired_env = {
@@ -193,6 +223,7 @@ def _run(args) -> None:
         import rclpy
 
     from rclpy.executors import ExternalShutdownException
+    from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
     import torch
     from geometry_msgs.msg import PoseStamped, Twist, TwistStamped, Vector3Stamped
     try:
@@ -200,6 +231,7 @@ def _run(args) -> None:
     except ImportError:
         CommandLong = None
     from scipy.spatial.transform import Rotation
+    from sensor_msgs.msg import Imu
     from std_msgs.msg import Bool, Float32
 
     try:
@@ -239,6 +271,16 @@ def _run(args) -> None:
             self.disarm_cmd_topic = args.disarm_cmd_topic or _default_topic(
                 args.namespace, args.vehicle_id, "disarm_cmd"
             )
+            self.robot_twist_body_msg_type = _resolve_robot_twist_body_msg_type(
+                self.robot_twist_body_topic, args.robot_twist_body_msg_type
+            )
+
+            qos_best_effort = QoSProfile(
+                reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                durability=QoSDurabilityPolicy.VOLATILE,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=10,
+            )
 
             self.cmd_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
             self.velocity_cmd_pub = self.node.create_publisher(Vector3Stamped, self.velocity_cmd_topic, 10)
@@ -246,22 +288,27 @@ def _run(args) -> None:
             self.disarm_cmd_pub = self.node.create_publisher(Bool, self.disarm_cmd_topic, 10)
 
             self.pose_sub = self.node.create_subscription(
-                PoseStamped, self.robot_pose_topic, self._pose_callback, 10
+                PoseStamped, self.robot_pose_topic, self._pose_callback, qos_best_effort
             )
-            self.twist_sub = self.node.create_subscription(
-                TwistStamped, self.robot_twist_body_topic, self._twist_callback, 10
-            )
+            if self.robot_twist_body_msg_type == "imu":
+                self.twist_sub = self.node.create_subscription(
+                    Imu, self.robot_twist_body_topic, self._imu_callback, qos_best_effort
+                )
+            else:
+                self.twist_sub = self.node.create_subscription(
+                    TwistStamped, self.robot_twist_body_topic, self._twist_callback, qos_best_effort
+                )
             self.twist_inertial_sub = self.node.create_subscription(
                 TwistStamped,
                 self.robot_twist_inertial_topic,
                 self._twist_inertial_callback,
-                10,
+                qos_best_effort,
             )
             self.platform_pose_sub = self.node.create_subscription(
-                PoseStamped, self.platform_pose_topic, self._platform_pose_callback, 10
+                PoseStamped, self.platform_pose_topic, self._platform_pose_callback, qos_best_effort
             )
             self.platform_twist_sub = self.node.create_subscription(
-                TwistStamped, self.platform_twist_topic, self._platform_twist_callback, 10
+                TwistStamped, self.platform_twist_topic, self._platform_twist_callback, qos_best_effort
             )
 
             checkpoint_path = (
@@ -315,6 +362,11 @@ def _run(args) -> None:
             self.disarm_response_timeout = float(args.disarm_response_timeout)
             self.disarm_fire_and_forget = bool(args.disarm_fire_and_forget)
             self.post_disarm_hold_seconds = float(args.post_disarm_hold_seconds)
+            self.enable_csv = bool(args.enable_csv)
+            self.enable_async_logging = bool(args.enable_async_logging)
+            self.log_queue_size = max(8, int(args.log_queue_size))
+            self.log_flush_period_s = max(0.05, float(args.log_flush_period_s))
+            self.csv_log_dir = str(args.csv_log_dir) if args.csv_log_dir else str(args.log_root)
             self.last_obs_action = np.zeros((4,), dtype=np.float32)
             self.last_cmd_action = np.zeros((4,), dtype=np.float32)
 
@@ -336,6 +388,20 @@ def _run(args) -> None:
             self.done_enter_time = None
             self.disarm_time = None
             self._stopped = False
+            self._start_monotonic = time.monotonic()
+            self._csv_file = None
+            self._csv_writer = None
+            self._log_path = None
+            self._csv_fieldnames = []
+            self._log_queue = None
+            self._log_thread = None
+            self._workers_started = False
+            self._workers_stopped = False
+            self._log_dropped = 0
+            self._log_sentinel = object()
+
+            self._init_csv_logger()
+            self._start_background_workers()
 
             self.cmd_long_cli = None
             if self.enable_proximity_disarm and self.disarm_via_service:
@@ -350,7 +416,7 @@ def _run(args) -> None:
             self._log_info(
                 "RL landing publisher topics: "
                 f"robot_pose='{self.robot_pose_topic}', "
-                f"robot_twist_body='{self.robot_twist_body_topic}', "
+                f"robot_twist_body='{self.robot_twist_body_topic}' ({self.robot_twist_body_msg_type}), "
                 f"robot_twist_inertial='{self.robot_twist_inertial_topic}', "
                 f"platform_pose='{self.platform_pose_topic}', "
                 f"platform_twist='{self.platform_twist_topic}', "
@@ -385,6 +451,213 @@ def _run(args) -> None:
         def _log_warn(self, message: str) -> None:
             self._log("WARN", message)
 
+        def _init_csv_logger(self) -> None:
+            if not self.enable_csv:
+                self._log_info("CSV logging disabled by parameter enable_csv=False")
+                self._csv_file = None
+                self._csv_writer = None
+                self._log_path = None
+                self._csv_fieldnames = []
+                return
+            try:
+                os.makedirs(self.csv_log_dir, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self._log_path = os.path.join(self.csv_log_dir, f"logs_{timestamp}_rl_policy.csv")
+                self._csv_fieldnames = [
+                    "t",
+                    "policy_step",
+                    "robot_pos_x",
+                    "robot_pos_y",
+                    "robot_pos_z",
+                    "platform_pos_x",
+                    "platform_pos_y",
+                    "platform_pos_z",
+                    "rel_pos_x",
+                    "rel_pos_y",
+                    "rel_pos_z",
+                    "obs_rel_lin_vel_x",
+                    "obs_rel_lin_vel_y",
+                    "obs_rel_lin_vel_z",
+                    "obs_rel_quat_w",
+                    "obs_rel_quat_x",
+                    "obs_rel_quat_y",
+                    "obs_rel_quat_z",
+                    "obs_rel_ang_vel_x",
+                    "obs_rel_ang_vel_y",
+                    "obs_rel_ang_vel_z",
+                    "obs_projected_gravity_x",
+                    "obs_projected_gravity_y",
+                    "obs_projected_gravity_z",
+                    "obs_last_action_vx",
+                    "obs_last_action_vy",
+                    "obs_last_action_vz",
+                    "obs_last_action_yaw_rate",
+                    "action_vx",
+                    "action_vy",
+                    "action_vz",
+                    "action_yaw_rate",
+                ]
+                self._csv_file = open(self._log_path, "w", newline="")
+                self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=self._csv_fieldnames)
+                self._csv_writer.writeheader()
+                self._csv_file.flush()
+                self._log_info(f"CSV logging to {self._log_path}")
+            except Exception as exc:
+                self._log_warn(f"CSV logging disabled: {exc}")
+                self._csv_file = None
+                self._csv_writer = None
+                self._log_path = None
+                self._csv_fieldnames = []
+
+        def _start_background_workers(self) -> None:
+            if self._workers_started:
+                return
+            if self.enable_async_logging and self._csv_writer is not None:
+                self._log_queue = queue.Queue(maxsize=self.log_queue_size)
+                self._log_thread = threading.Thread(target=self._logging_worker, name="csv-logger", daemon=True)
+                self._log_thread.start()
+            self._workers_started = True
+
+        def _stop_background_workers(self) -> None:
+            if self._workers_stopped:
+                return
+            self._workers_stopped = True
+            if self._log_thread is not None and self._log_queue is not None:
+                self._enqueue_log_item(self._log_sentinel, allow_drop=True)
+                self._log_thread.join(timeout=3.0)
+                if self._log_thread.is_alive():
+                    self._log_warn("CSV logger thread did not stop cleanly.")
+            self._log_thread = None
+
+        def _enqueue_log_item(self, item, allow_drop: bool) -> bool:
+            if self._log_queue is None:
+                return False
+            try:
+                self._log_queue.put_nowait(item)
+                return True
+            except queue.Full:
+                if not allow_drop:
+                    return False
+                try:
+                    self._log_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._log_queue.put_nowait(item)
+                    return True
+                except queue.Full:
+                    return False
+
+        def _flush_csv(self) -> None:
+            if self._csv_file is None:
+                return
+            try:
+                self._csv_file.flush()
+            except Exception as exc:
+                self._log_warn(f"CSV flush failed: {exc}")
+
+        def _write_csv_row(self, row: dict) -> bool:
+            if self._csv_writer is None:
+                return False
+            try:
+                self._csv_writer.writerow(row)
+                return True
+            except Exception as exc:
+                self._log_warn(f"CSV log write failed: {exc}")
+                self._csv_writer = None
+                return False
+
+        def _logging_worker(self) -> None:
+            if self._log_queue is None:
+                return
+            pending = 0
+            last_flush = time.monotonic()
+            while True:
+                item = None
+                try:
+                    item = self._log_queue.get(timeout=0.2)
+                except queue.Empty:
+                    pass
+                if item is self._log_sentinel:
+                    break
+                if item is not None and self._write_csv_row(item):
+                    pending += 1
+                now = time.monotonic()
+                if pending > 0 and (now - last_flush) >= self.log_flush_period_s:
+                    self._flush_csv()
+                    pending = 0
+                    last_flush = now
+            if pending > 0:
+                self._flush_csv()
+
+        def _build_csv_row(self, t_rel: float, obs: np.ndarray, action: np.ndarray):
+            if self._csv_writer is None:
+                return None
+            if obs is None or action is None:
+                return None
+            if self.robot_pos is None or self.platform_pos is None:
+                return None
+
+            rel_pos = obs[0:3]
+            return {
+                "t": float(t_rel),
+                "policy_step": int(self.step_count),
+                "robot_pos_x": float(self.robot_pos[0]),
+                "robot_pos_y": float(self.robot_pos[1]),
+                "robot_pos_z": float(self.robot_pos[2]),
+                "platform_pos_x": float(self.platform_pos[0]),
+                "platform_pos_y": float(self.platform_pos[1]),
+                "platform_pos_z": float(self.platform_pos[2]),
+                "rel_pos_x": float(rel_pos[0]),
+                "rel_pos_y": float(rel_pos[1]),
+                "rel_pos_z": float(rel_pos[2]),
+                "obs_rel_lin_vel_x": float(obs[3]),
+                "obs_rel_lin_vel_y": float(obs[4]),
+                "obs_rel_lin_vel_z": float(obs[5]),
+                "obs_rel_quat_w": float(obs[6]),
+                "obs_rel_quat_x": float(obs[7]),
+                "obs_rel_quat_y": float(obs[8]),
+                "obs_rel_quat_z": float(obs[9]),
+                "obs_rel_ang_vel_x": float(obs[10]),
+                "obs_rel_ang_vel_y": float(obs[11]),
+                "obs_rel_ang_vel_z": float(obs[12]),
+                "obs_projected_gravity_x": float(obs[13]),
+                "obs_projected_gravity_y": float(obs[14]),
+                "obs_projected_gravity_z": float(obs[15]),
+                "obs_last_action_vx": float(obs[16]),
+                "obs_last_action_vy": float(obs[17]),
+                "obs_last_action_vz": float(obs[18]),
+                "obs_last_action_yaw_rate": float(obs[19]),
+                "action_vx": float(action[0]),
+                "action_vy": float(action[1]),
+                "action_vz": float(action[2]),
+                "action_yaw_rate": float(action[3]),
+            }
+
+        def _log_csv_row(self, t_rel: float, obs: np.ndarray, action: np.ndarray) -> None:
+            row = self._build_csv_row(t_rel, obs, action)
+            if row is None:
+                return
+            if self.enable_async_logging and self._log_queue is not None:
+                if not self._enqueue_log_item(row, allow_drop=False):
+                    self._log_dropped += 1
+                    self._log_warn(f"CSV queue full; dropped rows={self._log_dropped}")
+                return
+            if self._write_csv_row(row):
+                self._flush_csv()
+
+        def _close_log(self) -> None:
+            self._stop_background_workers()
+            if self._csv_file:
+                try:
+                    self._csv_file.flush()
+                    self._csv_file.close()
+                except Exception as exc:
+                    self._log_warn(f"CSV log close failed: {exc}")
+                finally:
+                    self._csv_file = None
+                    self._csv_writer = None
+
         def _pose_callback(self, msg: PoseStamped):
             self.robot_pos = np.array(
                 [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z], dtype=np.float32
@@ -402,6 +675,11 @@ def _run(args) -> None:
         def _twist_callback(self, msg: TwistStamped):
             self.robot_ang_vel_b = np.array(
                 [msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z], dtype=np.float32
+            )
+
+        def _imu_callback(self, msg: Imu):
+            self.robot_ang_vel_b = np.array(
+                [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float32
             )
 
         def _twist_inertial_callback(self, msg: TwistStamped):
@@ -472,7 +750,7 @@ def _run(args) -> None:
                     rel_quat_wxyz.astype(np.float32),
                     rel_ang_vel.astype(np.float32),
                     projected_gravity.astype(np.float32),
-                    self.last_obs_action,
+                    self.last_cmd_action,
                 )
             )
 
@@ -628,14 +906,16 @@ def _run(args) -> None:
                 self.last_obs_action = raw_action
                 self.last_cmd_action = cmd_action
                 self.last_policy_time = now
+                t_rel = now - self._start_monotonic
+                self._log_csv_row(t_rel, obs, cmd_action)
                 self.step_count += 1
 
                 if args.debug_every > 0 and self.step_count % args.debug_every == 0:
                     self._log_info(
                         f"policy_step={self.step_count} obs_z={float(obs[2]):.3f} "
                         f"raw_action={self.last_obs_action.tolist()} "
-                        f"cmd_action={self.last_cmd_action.tolist()} "
                         f"vel_sp={self.last_cmd_action[:3].tolist()} yaw_rate={float(self.last_cmd_action[3]):.3f}"
+                        f" rel_pos={self._compute_rel_pos_world().tolist() if self._compute_rel_pos_world() is not None else None}"
                     )
 
             self._publish_cmd(self.last_cmd_action[:3], float(self.last_cmd_action[3]))
@@ -649,6 +929,7 @@ def _run(args) -> None:
                 pass
             finally:
                 self._publish_cmd(np.zeros((3,), dtype=np.float32), 0.0)
+                self._close_log()
                 self.node.destroy_node()
 
     try:

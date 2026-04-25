@@ -8,12 +8,12 @@ from isaaclab.utils import configclass
 from . import mdp
 
 if TYPE_CHECKING:
-    from .landing_sway_env_cfg import LandingSwayEnvCfg
+    from .landing_rps_env_cfg import LandingRpsEnvCfg
 
 
 @configclass
-class LandingSwayRewardWeightsCfg:
-    """Reward weights applied in ``LandingSwayEnvCfg.__post_init__``."""
+class LandingRpsRewardWeightsCfg:
+    """Reward weights applied in ``LandingRpsEnvCfg.__post_init__``."""
 
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
@@ -22,30 +22,26 @@ class LandingSwayRewardWeightsCfg:
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination 
     touchdown_terminated: float = 50.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
-    position_track: float = 10.0
+    position_track: float = 20.0
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
     # pushes agent to land
-    vertical_clearance_excess: float = -0.5
+    vertical_clearance_excess: float = -.50
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.01
     # mdp.raw_action_component_l2: penalize large raw policy vx action.
-    action_magnitude_x: float = -2.5
+    action_magnitude_x: float = -1.5
     # mdp.raw_action_component_l2: penalize large raw policy vy action.
-    action_magnitude_y: float = -2.5
+    action_magnitude_y: float = -1.5
     # mdp.raw_action_component_l2: penalize large raw policy vz action.
-    action_magnitude_z: float = -2.5
+    action_magnitude_z: float = -1.5
     # mdp.raw_action_component_l2: penalize large raw policy yaw-rate action.
     action_magnitude_yaw_rate: float = -1.2
-    # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vx action.
-    velocity_action_rate_x: float = -50.0
-    # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vy action.
-    velocity_action_rate_y: float = -50.0
-    # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vz action.
-    velocity_action_rate_z: float = -35.0
+    # mdp.velocity_action_rate_l2:Continuity error penalize step-to-step change in commanded vx, vy, vz.
+    velocity_action_rate: float = -25.0
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
     uav_acceleration: float = -0.5
     # mdp.angular_rate_l2: penalize body angular rates.
@@ -62,27 +58,18 @@ class LandingSwayRewardWeightsCfg:
     upright: float = -20.0
     # mdp.touchdown_quality_reward multiplier. Keep 1.0 when using explicit good/bad touchdown values below.
     touchdown_quality: float = 1.0
-    # mdp.horizontal_velocity_error_tanh: positive bounded reward for matching platform XY velocity.
-    horizontal_velocity_match: float = 2.0
-    # mdp.near_target_action_xy_l2: penalize large raw xy action when already near the platform center.
-    near_target_action_xy: float = 0.0
+    #
+    horizontal_velocity_match: float = -0.2
 
 
 @configclass
-class LandingSwayPositionTrackCfg:
+class LandingRpsPositionTrackCfg:
     """Shape parameters for the dense XY position reward."""
 
     std_m: float = 2.0
 
-
 @configclass
-class LandingSwayNearTargetActionCfg:
-    """Shape parameters for the near-target XY action penalty."""
-
-    std_m: float = 0.6
-
-@configclass
-class LandingSwayTouchdownCfg:
+class LandingRpsTouchdownCfg:
     """Touchdown detection + quality thresholds."""
 
     # Contact-force threshold that marks touchdown onset.
@@ -112,7 +99,7 @@ class LandingSwayTouchdownCfg:
 
 
 @configclass
-class LandingSwayVerticalClearanceCfg:
+class LandingRpsVerticalClearanceCfg:
     """Linear vertical-clearance penalty threshold."""
 
     # Penalty activates when z_clearance > threshold_m.
@@ -120,7 +107,7 @@ class LandingSwayVerticalClearanceCfg:
 
 
 @configclass
-class LandingSwayTerminationPenaltyCfg:
+class LandingRpsTerminationPenaltyCfg:
     """Penalty applied for selected failure termination terms."""
 
     # Penalty value used by mdp.failure_termination_penalty for matched failure terms.
@@ -130,7 +117,7 @@ class LandingSwayTerminationPenaltyCfg:
 
 
 @configclass
-class LandingSwayTerminationThresholdsCfg:
+class LandingRpsTerminationThresholdsCfg:
     """Thresholds for termination terms (not weights)."""
 
     # absolute roll angle above this -> attitude_tilt.
@@ -146,14 +133,14 @@ class LandingSwayTerminationThresholdsCfg:
 
 
 @configclass
-class LandingSwaySceneLayoutCfg:
+class LandingRpsSceneLayoutCfg:
     """Scene-wide layout knobs applied before manager startup."""
 
     env_spacing: float = 6.0
 
 
 @configclass
-class LandingSwayEpisodeCfg:
+class LandingRpsEpisodeCfg:
     """Episode-level timing knobs."""
 
     # Episode timeout used by the `time_out` termination term.
@@ -161,7 +148,7 @@ class LandingSwayEpisodeCfg:
 
 
 @configclass
-class LandingSwayActionCommandLimitsCfg:
+class LandingRpsActionCommandLimitsCfg:
     """Policy command limits applied before controller execution."""
 
     # Explicit lower clipping limits for commanded vx, vy, vz in m/s.
@@ -177,7 +164,7 @@ class LandingSwayActionCommandLimitsCfg:
 
 
 @configclass
-class LandingSwayResetPoseRangeCfg:
+class LandingRpsResetPoseRangeCfg:
     """Robot reset pose ranges used by ``reset_root_state_uniform``."""
 
     x: tuple[float, float] = (-5.0, 5.0)
@@ -199,7 +186,7 @@ class LandingSwayResetPoseRangeCfg:
 
 
 @configclass
-class LandingSwayResetVelocityRangeCfg:
+class LandingRpsResetVelocityRangeCfg:
     """Robot reset velocity ranges used by ``reset_root_state_uniform``."""
 
     x: tuple[float, float] = (-0.2, 0.2)
@@ -221,15 +208,15 @@ class LandingSwayResetVelocityRangeCfg:
 
 
 @configclass
-class LandingSwayResetSpawnCfg:
+class LandingRpsResetSpawnCfg:
     """Grouped reset spawn ranges for pose and velocity."""
 
-    pose_range: LandingSwayResetPoseRangeCfg = LandingSwayResetPoseRangeCfg()
-    velocity_range: LandingSwayResetVelocityRangeCfg = LandingSwayResetVelocityRangeCfg()
+    pose_range: LandingRpsResetPoseRangeCfg = LandingRpsResetPoseRangeCfg()
+    velocity_range: LandingRpsResetVelocityRangeCfg = LandingRpsResetVelocityRangeCfg()
 
 
 @configclass
-class LandingSwayPlatformPlacementCfg:
+class LandingRpsPlatformPlacementCfg:
     """Platform initial placement in the scene."""
 
     pos: tuple[float, float, float] = (0.0, 0.0, 0.1)
@@ -285,7 +272,7 @@ PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_HEAVE_CFG = PLATFORM_STAGE_TRACK_XY_ROLL_PITC
     z=mdp.HarmonicAxisMotionCfg(
         enabled=True,
         num_terms_range=(2, 6),
-        amplitude_range=(0.2, 1.0),
+        amplitude_range=(0.02, 0.10),
         frequency_range_hz=(0.05, 0.25),
         phase_range_rad=(0.0, 2.0 * 3.141592653589793),
         spectral_decay=1.0,
@@ -296,33 +283,36 @@ PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_HEAVE_CFG = PLATFORM_STAGE_TRACK_XY_ROLL_PITC
 
 
 @configclass
-class LandingSwayPlatformMotionCfg:
+class LandingRpsPlatformMotionCfg:
     """Platform placement and motion overrides."""
 
-    placement: LandingSwayPlatformPlacementCfg = LandingSwayPlatformPlacementCfg()
-    stage_cfg: mdp.PlatformMotionStageCfg = PLATFORM_STAGE_TRACK_XY_CFG
-    stationary_env_probability: float = 0.3
+    placement: LandingRpsPlatformPlacementCfg = LandingRpsPlatformPlacementCfg()
+    stage_cfg: mdp.PlatformMotionStageCfg = PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_CFG
+    # Easy-to-edit hard cap on the platform's absolute roll motion.
+    max_roll_deg: float = 16.0
+    # Easy-to-edit hard cap on the platform's absolute pitch motion.
+    max_pitch_deg: float = 16.0
+    stationary_env_probability: float = 0.1
 
 
 @configclass
-class LandingSwayPostInitCfg:
+class LandingRpsPostInitCfg:
     """Single place to tune layout, reset, reward, platform, and domain randomization."""
 
-    scene: LandingSwaySceneLayoutCfg = LandingSwaySceneLayoutCfg()
-    episode: LandingSwayEpisodeCfg = LandingSwayEpisodeCfg()
-    action_command_limits: LandingSwayActionCommandLimitsCfg = LandingSwayActionCommandLimitsCfg()
-    reset_spawn: LandingSwayResetSpawnCfg = LandingSwayResetSpawnCfg()
-    reward_weights: LandingSwayRewardWeightsCfg = LandingSwayRewardWeightsCfg()
-    position_track: LandingSwayPositionTrackCfg = LandingSwayPositionTrackCfg()
-    near_target_action: LandingSwayNearTargetActionCfg = LandingSwayNearTargetActionCfg()
-    vertical_clearance: LandingSwayVerticalClearanceCfg = LandingSwayVerticalClearanceCfg()
-    touchdown: LandingSwayTouchdownCfg = LandingSwayTouchdownCfg()
-    termination_penalty: LandingSwayTerminationPenaltyCfg = LandingSwayTerminationPenaltyCfg()
-    termination_thresholds: LandingSwayTerminationThresholdsCfg = LandingSwayTerminationThresholdsCfg()
-    platform_motion: LandingSwayPlatformMotionCfg = LandingSwayPlatformMotionCfg()
+    scene: LandingRpsSceneLayoutCfg = LandingRpsSceneLayoutCfg()
+    episode: LandingRpsEpisodeCfg = LandingRpsEpisodeCfg()
+    action_command_limits: LandingRpsActionCommandLimitsCfg = LandingRpsActionCommandLimitsCfg()
+    reset_spawn: LandingRpsResetSpawnCfg = LandingRpsResetSpawnCfg()
+    reward_weights: LandingRpsRewardWeightsCfg = LandingRpsRewardWeightsCfg()
+    position_track: LandingRpsPositionTrackCfg = LandingRpsPositionTrackCfg()
+    vertical_clearance: LandingRpsVerticalClearanceCfg = LandingRpsVerticalClearanceCfg()
+    touchdown: LandingRpsTouchdownCfg = LandingRpsTouchdownCfg()
+    termination_penalty: LandingRpsTerminationPenaltyCfg = LandingRpsTerminationPenaltyCfg()
+    termination_thresholds: LandingRpsTerminationThresholdsCfg = LandingRpsTerminationThresholdsCfg()
+    platform_motion: LandingRpsPlatformMotionCfg = LandingRpsPlatformMotionCfg()
     vehicle_z0_m: float = 0.15 
 
-    domain_randomization: mdp.LandingSwayDomainRandomizationCfg = mdp.LandingSwayDomainRandomizationCfg(
+    domain_randomization: mdp.LandingRpsDomainRandomizationCfg = mdp.LandingRpsDomainRandomizationCfg(
         # Flag for overall DR enable/disable
         enabled=True,
         # Additive noise on mass
@@ -359,7 +349,7 @@ class LandingSwayPostInitCfg:
         velocity_d_gain_noise_std=(0.03, 0.03, 0.05),
     )
 
-    def apply(self, env_cfg: LandingSwayEnvCfg) -> None:
+    def apply(self, env_cfg: LandingRpsEnvCfg) -> None:
         """Apply overrides to the environment config before manager startup."""
 
         env_cfg.scene.env_spacing = self.scene.env_spacing
@@ -367,7 +357,26 @@ class LandingSwayPostInitCfg:
 
         env_cfg.scene.platform.init_state.pos = self.platform_motion.placement.pos
         env_cfg.scene.platform.init_state.rot = self.platform_motion.placement.rot
-        env_cfg.events.move_platform.params["stage_cfg"] = self.platform_motion.stage_cfg
+
+        stage_cfg = self.platform_motion.stage_cfg
+        if getattr(stage_cfg, "roll", None) is not None and stage_cfg.roll.enabled:
+            roll_low = float(stage_cfg.roll.amplitude_range[0])
+            roll_high = max(roll_low, math.radians(float(self.platform_motion.max_roll_deg)))
+            stage_cfg = stage_cfg.replace(
+                roll=stage_cfg.roll.replace(amplitude_range=(roll_low, roll_high))
+            )
+        if getattr(stage_cfg, "pitch", None) is not None and stage_cfg.pitch.enabled:
+            pitch_low = float(stage_cfg.pitch.amplitude_range[0])
+            pitch_high = max(pitch_low, math.radians(float(self.platform_motion.max_pitch_deg)))
+            stage_cfg = stage_cfg.replace(
+                pitch=stage_cfg.pitch.replace(amplitude_range=(pitch_low, pitch_high))
+            )
+        stage_cfg = stage_cfg.replace(
+            max_roll_abs_rad=math.radians(float(self.platform_motion.max_roll_deg)),
+            max_pitch_abs_rad=math.radians(float(self.platform_motion.max_pitch_deg)),
+        )
+
+        env_cfg.events.move_platform.params["stage_cfg"] = stage_cfg
         env_cfg.events.move_platform.params["stationary_env_probability"] = float(
             self.platform_motion.stationary_env_probability
         )
@@ -388,9 +397,7 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.action_magnitude_y.weight = self.reward_weights.action_magnitude_y
         env_cfg.rewards.action_magnitude_z.weight = self.reward_weights.action_magnitude_z
         env_cfg.rewards.action_magnitude_yaw_rate.weight = self.reward_weights.action_magnitude_yaw_rate
-        env_cfg.rewards.velocity_action_rate_x.weight = self.reward_weights.velocity_action_rate_x
-        env_cfg.rewards.velocity_action_rate_y.weight = self.reward_weights.velocity_action_rate_y
-        env_cfg.rewards.velocity_action_rate_z.weight = self.reward_weights.velocity_action_rate_z
+        env_cfg.rewards.velocity_action_rate.weight = self.reward_weights.velocity_action_rate
         env_cfg.rewards.uav_acceleration.weight = self.reward_weights.uav_acceleration
         env_cfg.rewards.angular_rate.weight = self.reward_weights.angular_rate
         env_cfg.rewards.angular_velocity_rate.weight = self.reward_weights.angular_velocity_rate
@@ -400,8 +407,6 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.upright.weight = self.reward_weights.upright
         env_cfg.rewards.touchdown_quality.weight = self.reward_weights.touchdown_quality
         env_cfg.rewards.horizontal_velocity_match.weight = self.reward_weights.horizontal_velocity_match
-        env_cfg.rewards.near_target_action_xy.weight = self.reward_weights.near_target_action_xy
-        env_cfg.rewards.near_target_action_xy.params["std"] = float(self.near_target_action.std_m)
 
         env_cfg.rewards.vertical_clearance_excess.params["clearance_threshold_m"] = float(self.vertical_clearance.threshold_m)
         env_cfg.rewards.terminated.params["penalty"] = float(self.termination_penalty.failure_penalty)

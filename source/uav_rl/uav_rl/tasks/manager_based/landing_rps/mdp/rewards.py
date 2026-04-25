@@ -131,20 +131,18 @@ def horizontal_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Sc
     return torch.sum(torch.square(asset.data.root_lin_vel_w[:, :2]), dim=1)
 
 
-def horizontal_velocity_error_tanh(
+def horizontal_velocity_error_l2(
     env: "ManagerBasedRLEnv",
     target_rel_xy: tuple[float, float] = (0.0, 0.0),
-    std: float = 0.5,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
 ) -> torch.Tensor:
-    """Positive XY relative-velocity tracking reward in [0, 1], larger when closer to target."""
+    """Penalize horizontal velocity error relative to a reference asset (platform by default)."""
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
     rel_vel_xy = asset.data.root_lin_vel_w[:, :2] - reference_asset.data.root_lin_vel_w[:, :2]
     target = _target_tensor(env, target_rel_xy, rel_vel_xy.dtype)
-    distance_xy = torch.linalg.norm(rel_vel_xy - target, dim=1)
-    return 1.0 - torch.tanh(distance_xy / max(std, 1.0e-3))
+    return torch.sum(torch.square(rel_vel_xy - target), dim=1)
 
 
 def vertical_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -167,31 +165,14 @@ def uav_linear_acceleration_l2(
     return torch.sum(torch.norm(asset.data.body_lin_acc_w[:, asset_cfg.body_ids, :], dim=-1), dim=1)
 
 
-def raw_action_rate_component_l2(env: "ManagerBasedRLEnv", action_index: int) -> torch.Tensor:
-    """Penalize one raw policy action-rate component by squared step-to-step change."""
-    action_index = int(action_index)
-    return torch.square(env.action_manager.action[:, action_index] - env.action_manager.prev_action[:, action_index])
+def velocity_action_rate_l2(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """Penalize step-to-step change in commanded vx, vy, vz only."""
+    return torch.sum(torch.square(env.action_manager.action[:, :3] - env.action_manager.prev_action[:, :3]), dim=1)
 
 
 def raw_action_component_l2(env: "ManagerBasedRLEnv", action_index: int) -> torch.Tensor:
     """Penalize one raw policy action component by squared magnitude."""
     return torch.square(env.action_manager.action[:, int(action_index)])
-
-
-def near_target_action_xy_l2(
-    env: "ManagerBasedRLEnv",
-    std: float = 0.5,
-    target_xy: tuple[float, float] = (0.0, 0.0),
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
-) -> torch.Tensor:
-    """Penalize raw XY action magnitude more strongly when the robot is already near the platform center."""
-
-    pos_rel = _relative_position(env, asset_cfg, reference_asset_cfg)
-    target = _target_tensor(env, target_xy, pos_rel.dtype)
-    distance_xy = torch.linalg.norm(pos_rel[:, :2] - target, dim=1)
-    proximity_gate = 1.0 - torch.tanh(distance_xy / max(std, 1.0e-3))
-    return proximity_gate * torch.sum(torch.square(env.action_manager.action[:, :2]), dim=1)
 
 
 def touchdown_quality_reward(
@@ -288,7 +269,7 @@ def angular_velocity_rate_l2(
     asset: RigidObject = env.scene[asset_cfg.name]
     current_ang_vel_b = asset.data.root_ang_vel_b
 
-    state_name = "_landing_sway_prev_root_ang_vel_b"
+    state_name = "_landing_rps_prev_root_ang_vel_b"
     prev_ang_vel_b = getattr(env, state_name, None)
     if prev_ang_vel_b is None or prev_ang_vel_b.shape != current_ang_vel_b.shape:
         setattr(env, state_name, current_ang_vel_b.clone())

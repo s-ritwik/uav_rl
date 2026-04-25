@@ -48,7 +48,7 @@ parser.add_argument(
 parser.add_argument(
     "--arm_delay",
     type=float,
-    default=3.0,
+    default=5.0,
     help="Minimum delay after the first PX4 heartbeat before attempting OFFBOARD arm/takeoff.",
 )
 parser.add_argument(
@@ -78,8 +78,8 @@ parser.add_argument("--platform_restitution", type=float, default=0.0, help="Pla
 parser.add_argument(
     "--motion_stage",
     type=str,
-    default="track_xy",
-    choices=("track_xy", "track_xy_roll_pitch", "track_xy_roll_pitch_heave"),
+    default="stationary",
+    choices=("stationary", "track_xy", "track_xy_roll_pitch", "track_xy_roll_pitch_heave"),
     help="Platform motion preset matching the vanilla task stages.",
 )
 parser.add_argument("--platform_seed", type=int, default=0, help="Random seed for the platform motion sampler.")
@@ -177,7 +177,7 @@ class PX4Ros2VelocityBridge(Backend):
         vehicle_id: int,
         namespace: str = "transfer",
         offboard_baseport: int = 14540,
-        auto_takeoff_alt: float = 2.0,
+        auto_takeoff_alt: float = 4.5,
         cmd_timeout: float = 0.5,
         arm_delay: float = 3.0,
         send_rate_hz: float = 25.0,
@@ -217,6 +217,9 @@ class PX4Ros2VelocityBridge(Backend):
 
         self._current_altitude = 0.0
         self._current_vertical_speed = 0.0
+        self._takeoff_target_altitude = None
+        self._last_takeoff_log_time = 0.0
+        self._px4_ready_for_takeoff = False
 
         self._latest_cmd = Twist()
         self._last_cmd_time = 0.0
@@ -284,12 +287,29 @@ class PX4Ros2VelocityBridge(Backend):
                     )
                 if command == mavutil.mavlink.MAV_CMD_DO_SET_MODE and result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
                     self._offboard_enabled = True
-                if command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM and result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
-                    if self._pending_arm_state is not None:
-                        self._armed = bool(self._pending_arm_state)
+                if command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
+                    if result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                        if self._pending_arm_state is not None:
+                            self._armed = bool(self._pending_arm_state)
+                            self._pending_arm_state = None
+                        if not self._armed:
+                            self._disarm_requested = False
+                    else:
                         self._pending_arm_state = None
-                    if not self._armed:
-                        self._disarm_requested = False
+            elif msg_type == "STATUSTEXT":
+                text = getattr(msg, "text", "")
+                if isinstance(text, bytes):
+                    text = text.decode(errors="ignore")
+                text = str(text).strip()
+                if not text:
+                    continue
+                carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: STATUSTEXT: {text}")
+                lowered_text = text.lower()
+                if "ready for takeoff" in lowered_text:
+                    self._px4_ready_for_takeoff = True
+                    self._last_arm_request_time = 0.0
+                elif "arming denied" in lowered_text:
+                    self._px4_ready_for_takeoff = False
 
     def _wait_ready(self, now: float) -> bool:
         wait_reasons = []
@@ -297,8 +317,6 @@ class PX4Ros2VelocityBridge(Backend):
             wait_reasons.append("heartbeat")
         elif self._first_heartbeat_time is not None and (now - self._first_heartbeat_time) < self._arm_delay:
             wait_reasons.append(f"arm_delay {self._arm_delay:.1f}s")
-        if not self._position_estimate_ready:
-            wait_reasons.append("position_estimate")
 
         if wait_reasons and (now - self._last_wait_log_time) >= 2.0:
             carb.log_warn(
@@ -307,6 +325,32 @@ class PX4Ros2VelocityBridge(Backend):
             self._last_wait_log_time = now
 
         return not wait_reasons
+
+    def _current_takeoff_target_altitude(self) -> float:
+        if self._takeoff_target_altitude is None:
+            return self._current_altitude + self._auto_takeoff_alt
+        return float(self._takeoff_target_altitude)
+
+    def _log_takeoff_status(self, now: float):
+        if self._takeoff_state == "ready":
+            return
+        if now - self._last_takeoff_log_time < 1.0:
+            return
+
+        carb.log_warn(
+            "[PX4Ros2VelocityBridge] drone%d: takeoff_state=%s alt=%.2f/%.2f vz=%.2f armed=%s offboard=%s prestream=%d"
+            % (
+                self._vehicle_id,
+                self._takeoff_state,
+                self._current_altitude,
+                self._current_takeoff_target_altitude(),
+                self._current_vertical_speed,
+                self._armed,
+                self._offboard_enabled,
+                self._prestream_count,
+            )
+        )
+        self._last_takeoff_log_time = now
 
     def _desired_velocity_enu(self, now: float) -> tuple[np.ndarray, float]:
         if self._takeoff_state == "ready":
@@ -326,7 +370,7 @@ class PX4Ros2VelocityBridge(Backend):
         if self._auto_takeoff_alt <= 0.0:
             return np.zeros(3, dtype=np.float32), 0.0
 
-        alt_error = self._auto_takeoff_alt - self._current_altitude
+        alt_error = self._current_takeoff_target_altitude() - self._current_altitude
         climb_speed = 0.0
         if alt_error > 0.15:
             climb_speed = min(1.0, max(0.25, 0.8 * alt_error))
@@ -384,7 +428,16 @@ class PX4Ros2VelocityBridge(Backend):
         if self._prestream_count < max(10, int(round(1.0 / self._send_period))):
             return
 
-        if not self._armed and now - self._last_arm_request_time >= 1.0:
+        requested_action = False
+        if not self._offboard_enabled and now - self._last_mode_request_time >= 1.0:
+            self._connection.set_mode("OFFBOARD")
+            self._last_action_time = now
+            self._last_mode_request_time = now
+            carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: requested OFFBOARD mode")
+            requested_action = True
+
+        arm_retry_period = 0.2 if self._px4_ready_for_takeoff else 1.0
+        if not self._armed and now - self._last_arm_request_time >= arm_retry_period:
             self._connection.mav.command_long_send(
                 self._target_system,
                 self._target_component,
@@ -402,20 +455,16 @@ class PX4Ros2VelocityBridge(Backend):
             self._last_action_time = now
             self._last_arm_request_time = now
             carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: retrying arm")
+            requested_action = True
+
+        if requested_action:
             return
 
-        if not self._offboard_enabled and now - self._last_mode_request_time >= 1.0:
-            self._connection.set_mode("OFFBOARD")
-            self._last_action_time = now
-            self._last_mode_request_time = now
-            carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: requested OFFBOARD mode")
-            return
-
-        if self._offboard_enabled and self._armed and self._takeoff_state == "pending":
+        if self._offboard_enabled and self._armed and self._takeoff_state != "taking_off":
             self._takeoff_state = "taking_off"
             self._ready_since = None
             carb.log_warn(
-                f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: armed in OFFBOARD, climbing to {self._auto_takeoff_alt:.2f} m"
+                f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: armed in OFFBOARD, climbing to {self._current_takeoff_target_altitude():.2f} m"
             )
 
     def _request_force_disarm(self, now: float):
@@ -450,11 +499,11 @@ class PX4Ros2VelocityBridge(Backend):
         if self._takeoff_state != "taking_off":
             return
 
-        altitude_error = abs(self._current_altitude - self._auto_takeoff_alt)
-        if altitude_error <= 0.12 and abs(self._current_vertical_speed) <= 0.12:
+        altitude_error = abs(self._current_altitude - self._current_takeoff_target_altitude())
+        if altitude_error <= 0.15 and abs(self._current_vertical_speed) <= 0.15:
             if self._ready_since is None:
                 self._ready_since = now
-            elif now - self._ready_since >= 0.75:
+            elif now - self._ready_since >= 0.5:
                 self._takeoff_state = "ready"
                 carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: ready for velocity commands")
         else:
@@ -469,6 +518,8 @@ class PX4Ros2VelocityBridge(Backend):
     def update_state(self, state):
         self._current_altitude = float(state.position[2])
         self._current_vertical_speed = float(state.linear_velocity[2])
+        if self._auto_takeoff_alt > 0.0 and self._takeoff_target_altitude is None:
+            self._takeoff_target_altitude = self._current_altitude + self._auto_takeoff_alt
 
     def input_reference(self):
         return self._input_ref
@@ -481,6 +532,7 @@ class PX4Ros2VelocityBridge(Backend):
         self._request_force_disarm(now)
         self._request_offboard_and_arm(now)
         self._update_takeoff_state(now)
+        self._log_takeoff_status(now)
 
     def start(self):
         self._connection = mavutil.mavlink_connection(
@@ -507,6 +559,9 @@ class PX4Ros2VelocityBridge(Backend):
         self._prestream_count = 0
         self._takeoff_state = "pending" if self._auto_takeoff_alt > 0.0 else "ready"
         self._ready_since = None
+        self._takeoff_target_altitude = None
+        self._last_takeoff_log_time = 0.0
+        self._px4_ready_for_takeoff = False
         self._latest_cmd = Twist()
         self._last_cmd_time = 0.0
 
@@ -540,6 +595,9 @@ class PX4Ros2VelocityBridge(Backend):
         self._prestream_count = 0
         self._takeoff_state = "pending" if self._auto_takeoff_alt > 0.0 else "ready"
         self._ready_since = None
+        self._takeoff_target_altitude = None
+        self._last_takeoff_log_time = 0.0
+        self._px4_ready_for_takeoff = False
         self._last_cmd_time = 0.0
 
     @property
@@ -640,6 +698,22 @@ class VehicleStateRos2Publisher(Backend):
 
 
 def _build_platform_stage_cfg(name: str) -> PlatformMotionStageCfg:
+    if name == "stationary":
+        return PlatformMotionStageCfg(
+            name="stationary",
+            x=HarmonicAxisMotionCfg(
+                enabled=True,
+                num_terms_range=(1, 1),
+                amplitude_range=(0.0, 0.0),
+                frequency_range_hz=(0.0, 0.0),
+                phase_range_rad=(0.0, 0.0),
+                spectral_decay=0.0,
+            ),
+            max_linear_speed=0.0,
+            max_linear_acceleration=0.0,
+            max_angular_speed=0.0,
+            max_angular_acceleration=0.0,
+        )
     track_xy = PlatformMotionStageCfg(
         name="track_xy",
         x=HarmonicAxisMotionCfg(
@@ -745,7 +819,8 @@ class PegasusApp:
         self.velocity_bridges = []
         self.state_publishers = []
         self.px4_backends = []
-        self.platform_motion_started = False
+        self.platform_motion_enabled = args_cli.motion_stage != "stationary"
+        self.platform_motion_started = not self.platform_motion_enabled
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
         atexit.register(self._shutdown)
@@ -930,7 +1005,7 @@ class PegasusApp:
         try:
             while simulation_app.is_running() and not self.stop_sim:
                 self.world.step(render=not args_cli.headless)
-                if not self.platform_motion_started and self.velocity_bridges:
+                if self.platform_motion_enabled and not self.platform_motion_started and self.velocity_bridges:
                     if self.velocity_bridges[0].ready_for_velocity_commands:
                         self.platform_motion_started = True
                         carb.log_warn("[transfer.app_px4] Platform motion enabled")

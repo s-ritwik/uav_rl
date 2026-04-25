@@ -17,14 +17,14 @@ from isaaclab.utils import configclass
 from uav_rl.assets import IRIS_CFG
 
 from . import mdp
-from .landing_sway_post_init_cfg import PLATFORM_STAGE_TRACK_XY_CFG, LandingSwayPostInitCfg
+from .landing_rps_post_init_cfg import PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_CFG, LandingRpsPostInitCfg
 
 PLATFORM_ARUCO_TEXTURE_PATH = (
     Path(__file__).resolve().parents[3] / "assets" / "Aruco" / "aruco_mark_fractal.png"
 )
 
 @configclass
-class LandingSwaySceneCfg(InteractiveSceneCfg):
+class LandingRpsSceneCfg(InteractiveSceneCfg):
     """Scene config: local Iris on a flat plane."""
 
     ground = AssetBaseCfg(
@@ -89,8 +89,8 @@ class LandingSwaySceneCfg(InteractiveSceneCfg):
 class ActionsCfg:
     """Policy action is [vx, vy, vz, yaw_rate]."""
 
-    control = mdp.LandingSwayVelocityActionCfg(
-        class_type=mdp.LandingSwayVelocityAction,
+    control = mdp.LandingRpsVelocityActionCfg(
+        class_type=mdp.LandingRpsVelocityAction,
         asset_name="robot",
         action_scale=(1.0, 1.0, 1.0, 1.0),
         action_offset=(0.0, 0.0, 0.0, 0.0),
@@ -127,10 +127,10 @@ class EventCfg:
     """Environment reset terms."""
 
     domain_randomization = EventTerm(
-        func=mdp.SampleLandingSwayDomainRandomization,
+        func=mdp.SampleLandingRpsDomainRandomization,
         mode="reset",
         params={
-            "rand_cfg": mdp.LandingSwayDomainRandomizationCfg(),
+            "rand_cfg": mdp.LandingRpsDomainRandomizationCfg(),
             "mass_asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
         },
     )
@@ -152,8 +152,8 @@ class EventCfg:
         is_global_time=True,
         params={
             "asset_cfg": SceneEntityCfg("platform"),
-            # Swap this preset as training progresses: XY -> deck attitude -> heave.
-            "stage_cfg": PLATFORM_STAGE_TRACK_XY_CFG,
+            # Default RPS platform motion: XY tracking with roll and pitch.
+            "stage_cfg": PLATFORM_STAGE_TRACK_XY_ROLL_PITCH_CFG,
             "stationary_env_probability": 0.0,
         },
     )
@@ -234,9 +234,7 @@ class RewardsCfg:
     # Stabilize around the hover setpoint.
     horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.08)
     vertical_speed = RewTerm(func=mdp.vertical_speed_l2, weight=-0.08)
-    velocity_action_rate_x = RewTerm(func=mdp.raw_action_rate_component_l2, weight=0.0, params={"action_index": 0})
-    velocity_action_rate_y = RewTerm(func=mdp.raw_action_rate_component_l2, weight=0.0, params={"action_index": 1})
-    velocity_action_rate_z = RewTerm(func=mdp.raw_action_rate_component_l2, weight=0.0, params={"action_index": 2})
+    velocity_action_rate = RewTerm(func=mdp.velocity_action_rate_l2, weight=0.0)
     uav_acceleration = RewTerm(
         func=mdp.uav_linear_acceleration_l2,
         weight=0.0,
@@ -279,21 +277,10 @@ class RewardsCfg:
         },
     )
     horizontal_velocity_match = RewTerm(
-        func=mdp.horizontal_velocity_error_tanh,
-        weight=0.5,
+        func=mdp.horizontal_velocity_error_l2,
+        weight=-0.5,
         params={
             "target_rel_xy": (0.0, 0.0),
-            "std": 0.5,
-            "asset_cfg": SceneEntityCfg("robot"),
-            "reference_asset_cfg": SceneEntityCfg("platform"),
-        },
-    )
-    near_target_action_xy = RewTerm(
-        func=mdp.near_target_action_xy_l2,
-        weight=0.0,
-        params={
-            "target_xy": (0.0, 0.0),
-            "std": 0.5,
             "asset_cfg": SceneEntityCfg("robot"),
             "reference_asset_cfg": SceneEntityCfg("platform"),
         },
@@ -333,13 +320,13 @@ class TerminationsCfg:
 
 
 @configclass
-class LandingSwayEnvCfg(ManagerBasedRLEnvCfg):
+class LandingRpsEnvCfg(ManagerBasedRLEnvCfg):
     """Manager-based landing-sway UAV environment using Iris + PX4-like controller."""
 
-    scene: LandingSwaySceneCfg = LandingSwaySceneCfg(num_envs=1024, env_spacing=10.0)
+    scene: LandingRpsSceneCfg = LandingRpsSceneCfg(num_envs=1024, env_spacing=10.0)
 
-    post_init_cfg: LandingSwayPostInitCfg = LandingSwayPostInitCfg()
-    domain_randomization: mdp.LandingSwayDomainRandomizationCfg = mdp.LandingSwayDomainRandomizationCfg()
+    post_init_cfg: LandingRpsPostInitCfg = LandingRpsPostInitCfg()
+    domain_randomization: mdp.LandingRpsDomainRandomizationCfg = mdp.LandingRpsDomainRandomizationCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventCfg = EventCfg()
