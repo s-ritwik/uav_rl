@@ -158,13 +158,12 @@ class MultiSineMotionProfile:
         self.stage_cfg = stage_cfg
         self.base_position = np.asarray(base_position, dtype=np.float64)
         self.rng = np.random.default_rng(rng_seed)
-        self._max_terms = max(
+        enabled_term_caps = [
             getattr(self.stage_cfg, channel_name).num_terms_range[1]
             for channel_name in self.CHANNEL_NAMES
             if getattr(self.stage_cfg, channel_name).enabled
-        )
-        if self._max_terms <= 0:
-            raise ValueError("At least one motion channel must be enabled.")
+        ]
+        self._max_terms = max(enabled_term_caps, default=0)
 
         self.amplitudes = np.zeros((len(self.CHANNEL_NAMES), self._max_terms), dtype=np.float64)
         self.omegas = np.zeros_like(self.amplitudes)

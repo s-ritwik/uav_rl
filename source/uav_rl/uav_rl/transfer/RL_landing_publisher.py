@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vehicle-id", type=int, default=0, help="Vehicle id suffix used in ROS topics.")
     parser.add_argument("--policy-rate-hz", type=float, default=25.0, help="Policy inference rate.")
     parser.add_argument("--cmd-publish-rate-hz", type=float, default=25.0, help="Rate for publishing cmd_vel.")
-    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-24_15-08-44_landing_sway_2.8.3/exported/policy.pt", help="Path to exported policy.pt.")
+    parser.add_argument("--policy-jit", type=str, default="/home/rycker/src/uav_rl/logs/rsl_rl/landing_sway/2026-04-27_09-51-07_landing_sway_2.8.7/exported/policy.pt", help="Path to exported policy.pt.")
     parser.add_argument("--checkpoint-path", type=str, default=None, help="Path to an RSL-RL checkpoint file.")
     parser.add_argument(
         "--load-run",

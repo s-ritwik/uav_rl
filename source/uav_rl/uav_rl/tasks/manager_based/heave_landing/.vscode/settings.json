@@ -1,0 +1,23 @@
+{
+    "ROS2.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/rycker/projects/ros2_ws/install/stewart_platform/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/install/precision_landing_using_vision/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/install/precision_landing_using_vision_msgs/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/src/install/stewart_platform/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/src/install/precision_landing_using_vision/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/src/install/precision_landing_using_vision_msgs/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/rycker/projects/ros2_ws/install/stewart_platform/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/install/precision_landing_using_vision/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/install/precision_landing_using_vision_msgs/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/src/install/stewart_platform/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/src/install/precision_landing_using_vision/lib/python3.10/site-packages",
+        "/home/rycker/projects/ros2_ws/src/install/precision_landing_using_vision_msgs/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}
