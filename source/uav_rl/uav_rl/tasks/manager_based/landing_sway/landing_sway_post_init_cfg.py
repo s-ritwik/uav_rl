@@ -425,6 +425,28 @@ class LandingSwayPostInitCfg:
         env_cfg.rewards.touchdown_quality.params["bad_touchdown_reward"] = float(self.touchdown.bad_touchdown_reward)
         env_cfg.rewards.touchdown_quality.params["center_proximity_bonus"] = float(self.touchdown.center_proximity_bonus)
         env_cfg.terminations.touchdown.params["threshold"] = float(self.touchdown.force_threshold_n)
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_speed_mps"] = float(
+            self.touchdown.max_touchdown_speed_mps
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_xy_error_m"] = float(self.touchdown.max_xy_error_m)
+        env_cfg.curriculum.touchdown_quality_metrics.params["require_xy_within_box"] = bool(
+            self.touchdown.require_xy_within_box
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["require_attitude_within_limits"] = bool(
+            self.touchdown.require_attitude_within_limits
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_roll_deg"] = float(
+            self.touchdown.max_touchdown_roll_deg
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_pitch_deg"] = float(
+            self.touchdown.max_touchdown_pitch_deg
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_yaw_deg"] = float(
+            self.touchdown.max_touchdown_yaw_deg
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["target_touchdown_yaw_deg"] = float(
+            self.touchdown.target_touchdown_yaw_deg
+        )
 
         env_cfg.actions.control.velocity_lower_limits = tuple(
             float(v) for v in self.action_command_limits.velocity_lower_limits

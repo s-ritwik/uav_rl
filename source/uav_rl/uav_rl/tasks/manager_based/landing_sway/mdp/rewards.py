@@ -8,7 +8,14 @@ import torch
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import math as math_utils
-from .landing_state import touchdown_just_happened, touchdown_pre_rel_vz, update_touchdown_state
+from .landing_state import (
+    touchdown_flag,
+    touchdown_just_happened,
+    touchdown_pre_rel_vz,
+    touchdown_roll_pitch_yaw,
+    touchdown_xy_error,
+    update_touchdown_state,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -273,6 +280,80 @@ def touchdown_quality_reward(
         torch.full_like(pre_rel_vz[just_touched], float(bad_touchdown_reward)),
     )
     return reward
+
+
+def touchdown_quality_metrics(
+    env: "ManagerBasedRLEnv",
+    env_ids,
+    max_touchdown_speed_mps: float = 0.25,
+    max_xy_error_m: float = 0.20,
+    require_xy_within_box: bool = False,
+    require_attitude_within_limits: bool = True,
+    max_touchdown_roll_deg: float = 10.0,
+    max_touchdown_pitch_deg: float = 10.0,
+    max_touchdown_yaw_deg: float = 10.0,
+    target_touchdown_yaw_deg: float = 0.0,
+) -> dict[str, float]:
+    """Return reset-time touchdown quality percentages for the environments being reset."""
+
+    if env_ids is None:
+        env_ids_tensor = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+    elif isinstance(env_ids, slice):
+        env_ids_tensor = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+    elif isinstance(env_ids, torch.Tensor):
+        env_ids_tensor = env_ids.to(device=env.device, dtype=torch.long)
+    else:
+        env_ids_tensor = torch.tensor(env_ids, device=env.device, dtype=torch.long)
+
+    if env_ids_tensor.numel() == 0:
+        return {
+            "touchdown_rate": 0.0,
+            "good_touchdown_rate": 0.0,
+            "bad_touchdown_rate": 0.0,
+            "good_touchdown_pct": 0.0,
+            "bad_touchdown_pct": 0.0,
+        }
+
+    touched = touchdown_flag(env)[env_ids_tensor]
+    pre_rel_vz = touchdown_pre_rel_vz(env)[env_ids_tensor]
+    xy_error = touchdown_xy_error(env)[env_ids_tensor]
+    roll, pitch, yaw = touchdown_roll_pitch_yaw(env)
+    roll = roll[env_ids_tensor]
+    pitch = pitch[env_ids_tensor]
+    yaw = yaw[env_ids_tensor]
+
+    descent_speed = (-pre_rel_vz).clamp_min(0.0)
+    target_yaw_rad = math.radians(float(target_touchdown_yaw_deg))
+    yaw_error = torch.atan2(torch.sin(yaw - target_yaw_rad), torch.cos(yaw - target_yaw_rad))
+
+    speed_ok = descent_speed <= float(max_touchdown_speed_mps)
+    roll_ok = torch.abs(roll) <= math.radians(float(max_touchdown_roll_deg))
+    pitch_ok = torch.abs(pitch) <= math.radians(float(max_touchdown_pitch_deg))
+    yaw_ok = torch.abs(yaw_error) <= math.radians(float(max_touchdown_yaw_deg))
+    if require_attitude_within_limits:
+        attitude_ok = roll_ok & pitch_ok & yaw_ok
+    else:
+        attitude_ok = torch.ones_like(speed_ok, dtype=torch.bool)
+    if require_xy_within_box:
+        good = touched & speed_ok & attitude_ok & (xy_error <= float(max_xy_error_m))
+    else:
+        good = touched & speed_ok & attitude_ok
+    bad = touched & ~good
+
+    touchdown_count = touched.sum()
+    touchdown_den = float(touchdown_count.item())
+    reset_den = float(env_ids_tensor.numel())
+
+    good_touchdown_pct = float(good.sum().item() / touchdown_den) if touchdown_den > 0.0 else 0.0
+    bad_touchdown_pct = float(bad.sum().item() / touchdown_den) if touchdown_den > 0.0 else 0.0
+
+    return {
+        "touchdown_rate": float(touchdown_count.item() / reset_den),
+        "good_touchdown_rate": float(good.sum().item() / reset_den),
+        "bad_touchdown_rate": float(bad.sum().item() / reset_den),
+        "good_touchdown_pct": good_touchdown_pct,
+        "bad_touchdown_pct": bad_touchdown_pct,
+    }
 
 
 def angular_rate_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:

@@ -89,9 +89,9 @@ class HeaveLandingTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.4
+    max_touchdown_speed_mps: float = 0.25
     # XY-center tolerance used only when require_xy_within_box=True.
-    max_xy_error_m: float = 0.4
+    max_xy_error_m: float = 0.2
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
     # If True, good touchdown also requires roll/pitch/yaw to satisfy the attitude limits below.
@@ -107,7 +107,7 @@ class HeaveLandingTouchdownCfg:
     # Reward value applied on good touchdown event.
     good_touchdown_reward: float = 5000.0
     # Reward value applied on bad touchdown event.
-    bad_touchdown_reward: float = -100.0
+    bad_touchdown_reward: float = -300.0
     # Extra shaped bonus on good touchdowns that increases as XY touchdown error approaches zero.
     center_proximity_bonus: float = 1000.0
 
@@ -327,6 +327,8 @@ class HeaveLandingCsvHeaveMotionCfg:
     min_remaining_s: float = 60.0
     scale: float = .32
     bias_m: float = 1.5
+    randomize_bias: bool = False
+    bias_range_m: tuple[float, float] = (0.5, 2.5)
 
 
 @configclass
@@ -401,6 +403,8 @@ class HeaveLandingPostInitCfg:
         env_cfg.events.move_platform.params["min_remaining_s"] = float(self.csv_heave_motion.min_remaining_s)
         env_cfg.events.move_platform.params["scale"] = float(self.csv_heave_motion.scale)
         env_cfg.events.move_platform.params["bias_m"] = float(self.csv_heave_motion.bias_m)
+        env_cfg.events.move_platform.params["randomize_bias"] = bool(self.csv_heave_motion.randomize_bias)
+        env_cfg.events.move_platform.params["bias_range_m"] = tuple(float(x) for x in self.csv_heave_motion.bias_range_m)
 
         env_cfg.events.reset_root.params["pose_range"] = self.reset_spawn.pose_range.as_dict()
         env_cfg.events.reset_root.params["velocity_range"] = self.reset_spawn.velocity_range.as_dict()
@@ -455,6 +459,28 @@ class HeaveLandingPostInitCfg:
         env_cfg.rewards.touchdown_quality.params["bad_touchdown_reward"] = float(self.touchdown.bad_touchdown_reward)
         env_cfg.rewards.touchdown_quality.params["center_proximity_bonus"] = float(self.touchdown.center_proximity_bonus)
         env_cfg.terminations.touchdown.params["threshold"] = float(self.touchdown.force_threshold_n)
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_speed_mps"] = float(
+            self.touchdown.max_touchdown_speed_mps
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_xy_error_m"] = float(self.touchdown.max_xy_error_m)
+        env_cfg.curriculum.touchdown_quality_metrics.params["require_xy_within_box"] = bool(
+            self.touchdown.require_xy_within_box
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["require_attitude_within_limits"] = bool(
+            self.touchdown.require_attitude_within_limits
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_roll_deg"] = float(
+            self.touchdown.max_touchdown_roll_deg
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_pitch_deg"] = float(
+            self.touchdown.max_touchdown_pitch_deg
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_yaw_deg"] = float(
+            self.touchdown.max_touchdown_yaw_deg
+        )
+        env_cfg.curriculum.touchdown_quality_metrics.params["target_touchdown_yaw_deg"] = float(
+            self.touchdown.target_touchdown_yaw_deg
+        )
 
         env_cfg.actions.control.velocity_lower_limits = tuple(
             float(v) for v in self.action_command_limits.velocity_lower_limits

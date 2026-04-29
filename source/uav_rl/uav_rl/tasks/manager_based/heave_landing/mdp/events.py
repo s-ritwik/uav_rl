@@ -201,6 +201,8 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         self.min_remaining_s = float(cfg.params.get("min_remaining_s", 60.0))
         self.scale = float(cfg.params.get("scale", 1.0))
         self.bias_m = float(cfg.params.get("bias_m", 1.5))
+        self.randomize_bias = bool(cfg.params.get("randomize_bias", False))
+        self.bias_range_m = tuple(float(x) for x in cfg.params.get("bias_range_m", (0.5, 2.5)))
         self.stationary_env_probability = float(cfg.params.get("stationary_env_probability", 0.0))
         self.platform: RigidObject = env.scene[self.asset_cfg.name]
 
@@ -208,6 +210,10 @@ class CSVHeavePlatformMotion(ManagerTermBase):
             raise ValueError("CSV heave sample_rate_hz must be positive.")
         if self.min_remaining_s < 0.0:
             raise ValueError("CSV heave min_remaining_s must be non-negative.")
+        if len(self.bias_range_m) != 2:
+            raise ValueError("CSV heave bias_range_m must contain exactly two values.")
+        if self.bias_range_m[0] > self.bias_range_m[1]:
+            raise ValueError("CSV heave bias_range_m min must be <= max.")
 
         csv_paths = sorted(self.dataset_dir.glob("*.csv"))
         if not csv_paths:
@@ -234,6 +240,7 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         self._dataset_ids = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self._start_indices = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self._episode_start_time_s = torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
+        self._bias_m = torch.full((self.num_envs,), self.bias_m, device=self.device, dtype=torch.float32)
         self._stationary_env_mask = torch.zeros((self.num_envs,), device=self.device, dtype=torch.bool)
 
         self.reset()
@@ -258,6 +265,13 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         self._start_indices[env_ids_tensor] = sampled_start_indices
         self._episode_start_time_s[env_ids_tensor] = current_time_s
         self._stationary_env_mask[env_ids_tensor] = False
+        if self.randomize_bias:
+            bias_min_m, bias_max_m = self.bias_range_m
+            self._bias_m[env_ids_tensor] = torch.empty(
+                env_ids_tensor.numel(), device=self.device, dtype=torch.float32
+            ).uniform_(bias_min_m, bias_max_m)
+        else:
+            self._bias_m[env_ids_tensor] = self.bias_m
 
         if self.stationary_env_probability > 0.0:
             stationary_draw = torch.rand(env_ids_tensor.numel(), device=self.device) < self.stationary_env_probability
@@ -275,9 +289,22 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         min_remaining_s: float | None = None,
         scale: float | None = None,
         bias_m: float | None = None,
+        randomize_bias: bool | None = None,
+        bias_range_m: tuple[float, float] | None = None,
         stationary_env_probability: float | None = None,
     ) -> None:
-        del env, asset_cfg, dataset_dir, sample_rate_hz, min_remaining_s, scale, bias_m, stationary_env_probability
+        del (
+            env,
+            asset_cfg,
+            dataset_dir,
+            sample_rate_hz,
+            min_remaining_s,
+            scale,
+            bias_m,
+            randomize_bias,
+            bias_range_m,
+            stationary_env_probability,
+        )
         env_ids_tensor = self._resolve_env_ids(env_ids)
         if env_ids_tensor.numel() == 0:
             return
@@ -325,12 +352,12 @@ class CSVHeavePlatformMotion(ManagerTermBase):
             z_values[dataset_indices] = torch.lerp(lower_values, upper_values, alpha)
             z_velocities[dataset_indices] = (upper_values - lower_values) * self.sample_rate_hz
 
-        scaled_bias = torch.full_like(z_values, self.bias_m)
-        z_offset = scaled_bias + self.scale * z_values
+        sampled_bias = self._bias_m[env_ids].to(dtype=z_values.dtype)
+        z_offset = sampled_bias + self.scale * z_values
         z_velocity = self.scale * z_velocities
 
         stationary_mask = self._stationary_env_mask[env_ids]
-        z_offset[stationary_mask] = self.bias_m
+        z_offset[stationary_mask] = sampled_bias[stationary_mask]
         z_velocity[stationary_mask] = 0.0
 
         pos_local = base_pos_local.clone()
@@ -394,7 +421,8 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         )
         default_root_state = self.platform.data.default_root_state[env_ids_tensor]
         base_world_z = default_root_state[:, 2] + self._env.scene.env_origins[env_ids_tensor, 2]
-        return base_world_z[:, None] + self.bias_m + future_heave
+        sampled_bias = self._bias_m[env_ids_tensor].to(dtype=future_heave.dtype)
+        return base_world_z[:, None] + sampled_bias[:, None] + future_heave
 
     def _sample_future_trace(
         self,

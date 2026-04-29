@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.utils import math as math_utils
 
 
 def _resolve_body_ids(env, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg) -> list[int]:
@@ -32,6 +33,10 @@ def _ensure_state(env):
         env._landing_touchdown_pre_rel_vz = torch.zeros(num_envs, device=device, dtype=torch.float32)
         env._landing_prev_rel_vz = torch.zeros(num_envs, device=device, dtype=torch.float32)
         env._landing_touchdown_force_norm = torch.zeros(num_envs, device=device, dtype=torch.float32)
+        env._landing_touchdown_xy_error = torch.zeros(num_envs, device=device, dtype=torch.float32)
+        env._landing_touchdown_roll = torch.zeros(num_envs, device=device, dtype=torch.float32)
+        env._landing_touchdown_pitch = torch.zeros(num_envs, device=device, dtype=torch.float32)
+        env._landing_touchdown_yaw = torch.zeros(num_envs, device=device, dtype=torch.float32)
         env._landing_state_step = -1
 
 
@@ -43,6 +48,10 @@ def clear_touchdown_state(env, env_ids: torch.Tensor | None = None) -> None:
         env._landing_touchdown_pre_rel_vz.zero_()
         env._landing_prev_rel_vz.zero_()
         env._landing_touchdown_force_norm.zero_()
+        env._landing_touchdown_xy_error.zero_()
+        env._landing_touchdown_roll.zero_()
+        env._landing_touchdown_pitch.zero_()
+        env._landing_touchdown_yaw.zero_()
         env._landing_state_step = -1
         return
 
@@ -52,6 +61,10 @@ def clear_touchdown_state(env, env_ids: torch.Tensor | None = None) -> None:
     env._landing_touchdown_pre_rel_vz[ids] = 0.0
     env._landing_prev_rel_vz[ids] = 0.0
     env._landing_touchdown_force_norm[ids] = 0.0
+    env._landing_touchdown_xy_error[ids] = 0.0
+    env._landing_touchdown_roll[ids] = 0.0
+    env._landing_touchdown_pitch[ids] = 0.0
+    env._landing_touchdown_yaw[ids] = 0.0
 
 
 def _reset_new_episodes(env) -> None:
@@ -86,12 +99,19 @@ def update_touchdown_state(
     contact_force_norm = torch.amax(contact_force_norm, dim=(1, 2))
 
     rel_vz = asset.data.root_lin_vel_w[:, 2] - reference_asset.data.root_lin_vel_w[:, 2]
+    rel_xy = asset.data.root_pos_w[:, :2] - reference_asset.data.root_pos_w[:, :2]
+    xy_error = torch.linalg.norm(rel_xy, dim=1)
+    roll, pitch, yaw = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
     just_happened = (~env._landing_touchdown_flag) & (contact_force_norm > float(threshold))
 
     env._landing_touchdown_just_happened.zero_()
     env._landing_touchdown_just_happened[just_happened] = True
     env._landing_touchdown_pre_rel_vz[just_happened] = env._landing_prev_rel_vz[just_happened]
     env._landing_touchdown_force_norm[:] = contact_force_norm
+    env._landing_touchdown_xy_error[just_happened] = xy_error[just_happened]
+    env._landing_touchdown_roll[just_happened] = roll[just_happened]
+    env._landing_touchdown_pitch[just_happened] = pitch[just_happened]
+    env._landing_touchdown_yaw[just_happened] = yaw[just_happened]
     env._landing_touchdown_flag |= just_happened
     env._landing_prev_rel_vz[:] = rel_vz
     env._landing_state_step = step
@@ -110,3 +130,13 @@ def touchdown_just_happened(env) -> torch.Tensor:
 def touchdown_pre_rel_vz(env) -> torch.Tensor:
     _ensure_state(env)
     return env._landing_touchdown_pre_rel_vz
+
+
+def touchdown_xy_error(env) -> torch.Tensor:
+    _ensure_state(env)
+    return env._landing_touchdown_xy_error
+
+
+def touchdown_roll_pitch_yaw(env) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    _ensure_state(env)
+    return env._landing_touchdown_roll, env._landing_touchdown_pitch, env._landing_touchdown_yaw

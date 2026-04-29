@@ -4,6 +4,7 @@ from pathlib import Path
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -333,6 +334,25 @@ class TerminationsCfg:
 
 
 @configclass
+class CurriculumCfg:
+    """Logging-only curriculum terms used to surface episode metrics."""
+
+    touchdown_quality_metrics = CurrTerm(
+        func=mdp.touchdown_quality_metrics,
+        params={
+            "max_touchdown_speed_mps": 0.25,
+            "max_xy_error_m": 0.20,
+            "require_xy_within_box": False,
+            "require_attitude_within_limits": True,
+            "max_touchdown_roll_deg": 10.0,
+            "max_touchdown_pitch_deg": 10.0,
+            "max_touchdown_yaw_deg": 10.0,
+            "target_touchdown_yaw_deg": 0.0,
+        },
+    )
+
+
+@configclass
 class LandingSwayEnvCfg(ManagerBasedRLEnvCfg):
     """Manager-based landing-sway UAV environment using Iris + PX4-like controller."""
 
@@ -345,6 +365,7 @@ class LandingSwayEnvCfg(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         self.decimation = 10
