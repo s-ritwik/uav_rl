@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import traceback
 import math
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -117,12 +119,208 @@ parser.add_argument(
     default=1.5,
     help="Constant vertical bias added to the heave trace so the platform stays above ground.",
 )
+parser.add_argument(
+    "--disable_vision",
+    action="store_true",
+    help="Disable the onboard vision detector subprocess and OpenCV overlay.",
+)
+parser.add_argument(
+    "--vision_image_topic",
+    type=str,
+    default="/rgb",
+    help="ROS 2 image topic published by the onboard Isaac camera graph.",
+)
+parser.add_argument(
+    "--vision_raw_pose_topic",
+    type=str,
+    default="/ar_pose/raw",
+    help="Raw vision pose topic from the fractal detector.",
+)
+parser.add_argument(
+    "--vision_filtered_pose_topic",
+    type=str,
+    default="/ar_pose/mekf_filtered",
+    help="Filtered vision pose topic from the fractal detector.",
+)
+parser.add_argument(
+    "--vision_marker_size_m",
+    type=float,
+    default=1.0,
+    help="Physical fractal marker size in meters passed to the detector.",
+)
+parser.add_argument(
+    "--vision_config_dir",
+    type=str,
+    default="/home/rycker/projects/ros2_ws/src/precision_landing_using_vision/precision_landing_using_vision/config",
+    help="Directory containing the fractal and camera intrinsics YAML files.",
+)
+parser.add_argument(
+    "--vision_fractal_config_file",
+    type=str,
+    default="configuration_fractal_m7.yml",
+    help="Fractal marker geometry YAML file name.",
+)
+parser.add_argument(
+    "--vision_camparam_config_file",
+    type=str,
+    default="CamParameters_gazebo_720p.yml",
+    help="Camera intrinsics YAML file name for the onboard Isaac camera.",
+)
+parser.add_argument(
+    "--vision_workspace_setup",
+    type=str,
+    default="/home/rycker/projects/ros2_ws/install/setup.bash",
+    help="ROS 2 workspace setup script that provides the precision_landing_using_vision package.",
+)
+parser.add_argument(
+    "--vision_display_scale",
+    type=float,
+    default=0.5,
+    help="Scale factor for the annotated Fractal feed window.",
+)
+def _str2bool(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "t", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "f", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
+parser.add_argument(
+    "--fractal_on",
+    "--fractal-on",
+    type=_str2bool,
+    nargs="?",
+    const=True,
+    default=False,
+    help="If true, open a small annotated fractal-detection feed window inside Isaac when vision starts.",
+)
+parser.add_argument(
+    "--vision_disable_overlay_viewer",
+    action="store_true",
+    help="Disable the annotated fractal feed window while keeping the detector runtime active.",
+)
+parser.add_argument(
+    "--vision_start_mode",
+    type=str,
+    default="after_takeoff",
+    choices=("immediate", "after_takeoff"),
+    help="When to start the external vision detector/viewer runtime.",
+)
+parser.add_argument(
+    "--vision_camera_frame_skip",
+    type=int,
+    default=5,
+    help="frameSkipCount applied to embedded ROS camera publishers; 5 means publish every 6th rendered frame.",
+)
+parser.add_argument(
+    "--vision_camera_queue_size",
+    type=int,
+    default=2,
+    help="queueSize applied to embedded ROS camera publishers.",
+)
+parser.add_argument(
+    "--vision_render_width",
+    type=int,
+    default=640,
+    help="Target width for the onboard camera render product used by the vision detector.",
+)
+parser.add_argument(
+    "--vision_render_height",
+    type=int,
+    default=360,
+    help="Target height for the onboard camera render product used by the vision detector.",
+)
+parser.add_argument(
+    "--vision_main_viewport_width",
+    type=int,
+    default=640,
+    help="Main Isaac viewport render width used when running the vision app non-headless.",
+)
+parser.add_argument(
+    "--vision_main_viewport_height",
+    type=int,
+    default=360,
+    help="Main Isaac viewport render height used when running the vision app non-headless.",
+)
+parser.add_argument(
+    "--vision_detector_camera_fps",
+    type=float,
+    default=10.0,
+    help="Camera FPS hint passed to the external fractal detector.",
+)
+parser.add_argument(
+    "--vision_detector_video_fps",
+    type=float,
+    default=2.0,
+    help="Recorded video FPS passed to the external fractal detector.",
+)
+parser.add_argument(
+    "--vision_detector_video_queue_max",
+    type=int,
+    default=4,
+    help="Maximum detector video writer queue length.",
+)
+parser.add_argument(
+    "--vision_camera_offset_x",
+    type=float,
+    default=0.0,
+    help="Camera-to-UAV x offset passed to the detector transform [m].",
+)
+parser.add_argument(
+    "--vision_camera_offset_y",
+    type=float,
+    default=0.0,
+    help="Camera-to-UAV y offset passed to the detector transform [m].",
+)
+parser.add_argument(
+    "--vision_camera_offset_z",
+    type=float,
+    default=0.0,
+    help="Camera-to-UAV z offset passed to the detector transform [m].",
+)
 
 args_cli, _ = parser.parse_known_args()
 if args_cli.num_drones < 1:
     parser.error("--num_drones must be greater than or equal to 1.")
 
-IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_legs.usd").resolve())
+
+def _bootstrap_isaac_ros2_python():
+    """Prefer Isaac Sim's bundled ROS 2 Python packages over the system ROS install.
+
+    Isaac Sim runs on Python 3.11 while Ubuntu 22.04 ROS Humble packages are built for Python 3.10.
+    If the system ROS paths appear first in sys.path, importing rclpy fails with a missing
+    `_rclpy_pybind11` extension. The ROS bridge ships a matching Python 3.11 bundle under the
+    extension tree, so make that path win before any ROS package import.
+    """
+
+    ros_distro = os.environ.setdefault("ROS_DISTRO", "humble")
+    os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+
+    isaac_root = Path("/home/rycker/isaacsim").resolve()
+    ros_bridge_root = isaac_root / "exts" / "isaacsim.ros2.bridge" / ros_distro
+    ros_python_root = ros_bridge_root / "rclpy"
+    ros_lib_root = ros_bridge_root / "lib"
+
+    if ros_python_root.is_dir():
+        sys.path[:] = [p for p in sys.path if "/opt/ros/" not in p]
+        if str(ros_python_root) not in sys.path:
+            sys.path.insert(0, str(ros_python_root))
+
+    if ros_lib_root.is_dir():
+        ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+        paths = [p for p in ld_library_path.split(":") if p]
+        if str(ros_lib_root) not in paths:
+            paths.append(str(ros_lib_root))
+            os.environ["LD_LIBRARY_PATH"] = ":".join(paths)
+
+
+_bootstrap_isaac_ros2_python()
+
+IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_cam.usd").resolve())
 PLATFORM_SIZE = (1.0, 1.0, 0.2)
 PLATFORM_ARUCO_TEXTURE_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "Aruco" / "aruco_mark_fractal.png"
@@ -171,17 +369,22 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
     if matching_pids:
         time.sleep(0.5)
 
-simulation_app = SimulationApp({"headless": args_cli.headless})
+simulation_app_config = {"headless": args_cli.headless}
+if not args_cli.headless:
+    simulation_app_config["width"] = max(int(args_cli.vision_main_viewport_width), 320)
+    simulation_app_config["height"] = max(int(args_cli.vision_main_viewport_height), 180)
+simulation_app = SimulationApp(simulation_app_config)
 
 import omni.timeline
 from omni.isaac.core.world import World
 from isaacsim.core.utils.extensions import enable_extension
 
 enable_extension("isaacsim.ros2.bridge")
+enable_extension("isaacsim.sensors.camera")
 
 from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 from pymavlink import mavutil
-from pxr import PhysxSchema, Sdf, UsdPhysics, UsdShade
+from pxr import PhysxSchema, Sdf, Usd, UsdPhysics, UsdShade
 from scipy.spatial.transform import Rotation
 import rclpy
 from std_msgs.msg import Bool
@@ -197,10 +400,14 @@ try:
     from .ardupilot_ros import PlatformRos2Publisher
     from .moving_platform import CsvHeaveMotionProfile, HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
     from .topics import cmd_vel_topic, disarm_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
+    from .vision_inprocess import InProcessFractalVisionSystem, InProcessVisionConfig
+    from .vision_pose_topics import VisionPoseTopicPublisherProcess, VisionPoseTopicsConfig
 except ImportError:
     from ardupilot_ros import PlatformRos2Publisher
     from moving_platform import CsvHeaveMotionProfile, HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
     from topics import cmd_vel_topic, disarm_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
+    from vision_inprocess import InProcessFractalVisionSystem, InProcessVisionConfig
+    from vision_pose_topics import VisionPoseTopicPublisherProcess, VisionPoseTopicsConfig
 
 
 class PX4Ros2VelocityBridge(Backend):
@@ -559,7 +766,12 @@ class PX4Ros2VelocityBridge(Backend):
         return self._input_ref
 
     def update(self, dt: float):
-        rclpy.spin_once(self.node, timeout_sec=0.0)
+        if not rclpy.ok():
+            return
+        try:
+            rclpy.spin_once(self.node, timeout_sec=0.0)
+        except Exception:
+            return
         self._drain_mavlink()
         now = time.monotonic()
         self._send_velocity_command(now)
@@ -708,15 +920,25 @@ class VehicleStateRos2Publisher(Backend):
         twist_inertial.twist.linear.y = float(state.linear_velocity[1])
         twist_inertial.twist.linear.z = float(state.linear_velocity[2])
 
-        self.pose_pub.publish(pose)
-        self.twist_pub.publish(twist)
-        self.twist_inertial_pub.publish(twist_inertial)
+        if not rclpy.ok():
+            return
+        try:
+            self.pose_pub.publish(pose)
+            self.twist_pub.publish(twist)
+            self.twist_inertial_pub.publish(twist_inertial)
+        except Exception:
+            return
 
     def input_reference(self):
         return self._input_ref
 
     def update(self, dt: float):
-        rclpy.spin_once(self.node, timeout_sec=0.0)
+        if not rclpy.ok():
+            return
+        try:
+            rclpy.spin_once(self.node, timeout_sec=0.0)
+        except Exception:
+            return
 
     def start(self):
         return
@@ -853,8 +1075,11 @@ class PegasusApp:
         self.velocity_bridges = []
         self.state_publishers = []
         self.px4_backends = []
+        self.vision_system: InProcessFractalVisionSystem | None = None
+        self._vision_system_started = False
         self.platform_motion_enabled = args_cli.motion_stage != "stationary"
         self.platform_motion_started = not self.platform_motion_enabled
+        self.vision_pose_publisher: VisionPoseTopicPublisherProcess | None = None
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
         atexit.register(self._shutdown)
@@ -894,7 +1119,10 @@ class PegasusApp:
         for vehicle_id in range(args_cli.num_drones):
             self.vehicle_factory(vehicle_id, gap_x_axis=args_cli.gap_x_axis)
 
+        self._configure_embedded_ros_camera_publishers(enable=not args_cli.disable_vision)
         self.world.reset()
+        self._configure_embedded_ros_camera_publishers(enable=not args_cli.disable_vision)
+        self._maybe_start_vision_system(force=args_cli.vision_start_mode == "immediate")
         self.platform.reset_profile()
         if args_cli.motion_stage == "heave":
             carb.log_warn(
@@ -989,6 +1217,208 @@ class PegasusApp:
             materialPurpose="physics",
         )
 
+    def _find_drone_camera_prims(self) -> list[str]:
+        stage = self.world.stage
+        if stage is None:
+            return []
+
+        camera_paths: list[str] = []
+        for prim in stage.Traverse():
+            if prim.GetTypeName() != "Camera":
+                continue
+            prim_path = str(prim.GetPath())
+            if not prim_path.startswith("/World/drone"):
+                continue
+            camera_paths.append(prim_path)
+        return sorted(set(camera_paths))
+
+    def _configure_embedded_ros_camera_publishers(self, enable: bool) -> None:
+        stage = self.world.stage
+        if stage is None:
+            return
+
+        changed_attrs = 0
+        for prim in stage.Traverse():
+            prim_path = str(prim.GetPath())
+            if "ROS_Camera" not in prim_path:
+                continue
+            try:
+                enabled_attr = prim.GetAttribute("inputs:enabled")
+                if enabled_attr and enabled_attr.IsValid() and enabled_attr.Get() is not bool(enable):
+                    enabled_attr.Set(bool(enable))
+                    changed_attrs += 1
+                if not enable:
+                    continue
+
+                frame_skip_attr = prim.GetAttribute("inputs:frameSkipCount")
+                if frame_skip_attr and frame_skip_attr.IsValid():
+                    desired_frame_skip = int(args_cli.vision_camera_frame_skip)
+                    if frame_skip_attr.Get() != desired_frame_skip:
+                        frame_skip_attr.Set(desired_frame_skip)
+                        changed_attrs += 1
+
+                queue_size_attr = prim.GetAttribute("inputs:queueSize")
+                if queue_size_attr and queue_size_attr.IsValid():
+                    desired_queue_size = int(args_cli.vision_camera_queue_size)
+                    if queue_size_attr.Get() != desired_queue_size:
+                        queue_size_attr.Set(desired_queue_size)
+                        changed_attrs += 1
+
+                node_type_attr = prim.GetAttribute("inputs:type")
+                topic_name_attr = prim.GetAttribute("inputs:topicName")
+                if (
+                    node_type_attr
+                    and node_type_attr.IsValid()
+                    and topic_name_attr
+                    and topic_name_attr.IsValid()
+                    and str(node_type_attr.Get()) == "rgb"
+                    and topic_name_attr.Get() != args_cli.vision_image_topic
+                ):
+                    topic_name_attr.Set(args_cli.vision_image_topic)
+                    changed_attrs += 1
+            except Exception:
+                continue
+
+        if changed_attrs > 0:
+            carb.log_warn(
+                "[transfer.app_px4] "
+                f"{'Configured' if enable else 'Disabled'} embedded ROS camera node(s) "
+                f"frame_skip={int(args_cli.vision_camera_frame_skip)} "
+                f"queue_size={int(args_cli.vision_camera_queue_size)} "
+                f"image_topic='{args_cli.vision_image_topic}'"
+            )
+
+    def _get_camera_calibration(self, camera_path: str, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
+        camera_prim = self.world.stage.GetPrimAtPath(camera_path)
+        lens_distortion_model = camera_prim.GetAttribute("omni:lensdistortion:model").Get()
+
+        if lens_distortion_model == "opencvPinhole":
+            fx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:fx").Get())
+            fy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:fy").Get())
+            cx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:cx").Get())
+            cy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:cy").Get())
+            distortion = [
+                float(camera_prim.GetAttribute(f"omni:lensdistortion:opencvPinhole:{name}").Get())
+                for name in ("k1", "k2", "p1", "p2", "k3")
+            ]
+        elif lens_distortion_model == "opencvFisheye":
+            fx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:fx").Get())
+            fy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:fy").Get())
+            cx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:cx").Get())
+            cy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:cy").Get())
+            distortion = [
+                float(camera_prim.GetAttribute(f"omni:lensdistortion:opencvFisheye:{name}").Get())
+                for name in ("k1", "k2", "k3", "k4")
+            ]
+            distortion.append(0.0)
+        else:
+            focal_length = float(camera_prim.GetAttribute("focalLength").Get())
+            horizontal_aperture = float(camera_prim.GetAttribute("horizontalAperture").Get())
+            vertical_aperture = float(camera_prim.GetAttribute("verticalAperture").Get())
+            fx = float(width) * focal_length / horizontal_aperture
+            fy = float(height) * focal_length / vertical_aperture
+            if not math.isclose(fx, fy, rel_tol=1e-9, abs_tol=1e-9):
+                carb.log_warn(
+                    f"[transfer.app_px4] Forcing fy to fx for generated intrinsics ({fy:.3f} != {fx:.3f})"
+                )
+                fy = fx
+            cx = float(width) * 0.5
+            cy = float(height) * 0.5
+            distortion = [0.0] * 5
+
+        distortion = (distortion + [0.0] * 5)[:5]
+        camera_matrix = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+        distortion_coeffs = np.array(distortion, dtype=np.float64)
+        return camera_matrix, distortion_coeffs
+
+    def _create_vision_system(self):
+        if args_cli.disable_vision:
+            self.vision_system = None
+            carb.log_warn("[transfer.app_px4] Vision system disabled.")
+            return
+
+        camera_paths = self._find_drone_camera_prims()
+        if not camera_paths:
+            carb.log_warn("[transfer.app_px4] No onboard camera prim found under /World/drone*; disabling vision.")
+            self.vision_system = None
+            return
+
+        if args_cli.num_drones > 1:
+            carb.log_warn(
+                "[transfer.app_px4] Multiple drones requested; the in-process detector is currently attached to the first camera only."
+            )
+
+        camera_path = camera_paths[0]
+        fractal_config_path = (
+            Path(args_cli.vision_config_dir).expanduser() / args_cli.vision_fractal_config_file
+        ).resolve()
+        if not fractal_config_path.is_file():
+            carb.log_warn(
+                f"[transfer.app_px4] Fractal config '{fractal_config_path}' does not exist; disabling vision."
+            )
+            self.vision_system = None
+            return
+
+        width = max(int(args_cli.vision_render_width), 1)
+        height = max(int(args_cli.vision_render_height), 1)
+        camera_matrix, distortion_coeffs = self._get_camera_calibration(camera_path, width, height)
+        if args_cli.fractal_on and args_cli.headless:
+            carb.log_warn("[transfer.app_px4] fractal_on requested, but the Fractal feed window is disabled in headless mode.")
+        enable_overlay = (
+            bool(args_cli.fractal_on)
+            and (not args_cli.headless)
+            and (not args_cli.vision_disable_overlay_viewer)
+        )
+
+        vision_cfg = InProcessVisionConfig(
+            camera_prim_path=camera_path,
+            image_topic=args_cli.vision_image_topic,
+            marker_size_m=args_cli.vision_marker_size_m,
+            fractal_config_path=str(fractal_config_path),
+            camera_matrix=camera_matrix,
+            distortion_coefficients=distortion_coeffs,
+            camera_to_uav_offset=(
+                args_cli.vision_camera_offset_x,
+                args_cli.vision_camera_offset_y,
+                args_cli.vision_camera_offset_z,
+            ),
+            detector_fps=args_cli.vision_detector_camera_fps,
+            resolution=(width, height),
+            display_scale=args_cli.vision_display_scale,
+            enable_overlay=enable_overlay,
+            window_name="Fractal",
+        )
+        self.vision_system = InProcessFractalVisionSystem(vision_cfg)
+
+    def _maybe_start_vision_system(self, force: bool = False):
+        if self.vision_system is None:
+            self._create_vision_system()
+        if self.vision_system is None:
+            return
+        if self._vision_system_started:
+            return
+        if not force and args_cli.vision_start_mode == "after_takeoff":
+            if not self.velocity_bridges or not self.velocity_bridges[0].ready_for_velocity_commands:
+                return
+        self.vision_system.start()
+        self.vision_pose_publisher = VisionPoseTopicPublisherProcess(
+            VisionPoseTopicsConfig(
+                enabled=True,
+                raw_pose_topic=args_cli.vision_raw_pose_topic,
+                filtered_pose_topic=args_cli.vision_filtered_pose_topic,
+                workspace_setup=args_cli.vision_workspace_setup,
+            )
+        )
+        self.vision_pose_publisher.start()
+        self._vision_system_started = True
+        carb.log_warn(
+            "[transfer.app_px4] In-process vision started "
+            f"camera_prim='{self.vision_system.config.camera_prim_path}' "
+            f"resolution={self.vision_system.config.resolution} "
+            f"detector_fps={self.vision_system.config.detector_fps:.1f} "
+            f"start_mode='{args_cli.vision_start_mode}'"
+        )
+
     def _handle_signal(self, signum, _frame):
         self._signal_count += 1
         if self._signal_count == 1:
@@ -1031,6 +1461,17 @@ class PegasusApp:
             except Exception as exc:
                 carb.log_warn(f"[transfer.app_px4] Failed while stopping PX4 backend: {exc}")
 
+        if self.vision_system is not None:
+            try:
+                self.vision_system.stop()
+            except Exception as exc:
+                carb.log_warn(f"[transfer.app_px4] Failed while stopping vision system: {exc}")
+        if self.vision_pose_publisher is not None:
+            try:
+                self.vision_pose_publisher.stop()
+            except Exception as exc:
+                carb.log_warn(f"[transfer.app_px4] Failed while stopping vision pose publisher: {exc}")
+
         for vehicle_id in range(args_cli.num_drones):
             try:
                 _kill_stale_px4_instance(vehicle_id, self.pg.px4_path)
@@ -1049,7 +1490,10 @@ class PegasusApp:
 
     def _publish_platform_state(self):
         for platform_publisher in self.platform_publishers:
-            platform_publisher.publish(self.platform.current_state)
+            try:
+                platform_publisher.publish(self.platform.current_state)
+            except Exception:
+                continue
 
     def _on_platform_physics_step(self, dt: float):
         if self.platform_motion_started:
@@ -1061,14 +1505,33 @@ class PegasusApp:
 
         try:
             while simulation_app.is_running() and not self.stop_sim:
-                self.world.step(render=not args_cli.headless)
+                now_s = time.monotonic()
+                render_frame = not args_cli.headless
+                if self.vision_system is not None and self._vision_system_started:
+                    render_frame = render_frame or self.vision_system.needs_render(now_s)
+                self.world.step(render=render_frame)
+                self._maybe_start_vision_system()
+                if self.vision_system is not None:
+                    estimate = self.vision_system.update()
+                    if estimate is not None and self.vision_pose_publisher is not None:
+                        self.vision_pose_publisher.publish_estimate(estimate)
+                if self.vision_pose_publisher is not None:
+                    self.vision_pose_publisher.update()
                 if self.platform_motion_enabled and not self.platform_motion_started and self.velocity_bridges:
                     if self.velocity_bridges[0].ready_for_velocity_commands:
                         self.platform_motion_started = True
                         carb.log_warn("[transfer.app_px4] Platform motion enabled")
         except KeyboardInterrupt:
             self.stop_sim = True
+        except BaseException as exc:
+            carb.log_error(f"[transfer.app_px4] Unhandled exception in run loop: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+            self.stop_sim = True
         finally:
+            carb.log_warn(
+                "[transfer.app_px4] exiting run loop "
+                f"simulation_app.is_running={simulation_app.is_running()} stop_sim={self.stop_sim}"
+            )
             carb.log_warn("PegasusApp PX4 Simulation App is closing.")
             self._shutdown()
 

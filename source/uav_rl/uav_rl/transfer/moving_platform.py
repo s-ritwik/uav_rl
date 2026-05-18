@@ -141,6 +141,96 @@ class PlatformState:
     angular_velocity: np.ndarray
 
 
+class CsvHeaveMotionProfile:
+    """Single-platform CSV heave playback matching the heave landing task sampling logic."""
+
+    def __init__(
+        self,
+        *,
+        dataset_dir: str | Path,
+        base_position: tuple[float, float, float] = (0.0, 0.0, 0.1),
+        sample_rate_hz: float = 20.0,
+        min_remaining_s: float = 60.0,
+        scale: float = 1.0,
+        bias_m: float = 1.5,
+        rng_seed: int | None = None,
+    ):
+        self.dataset_dir = Path(dataset_dir).expanduser().resolve()
+        self.base_position = np.asarray(base_position, dtype=np.float64)
+        self.sample_rate_hz = float(sample_rate_hz)
+        self.min_remaining_s = float(min_remaining_s)
+        self.scale = float(scale)
+        self.bias_m = float(bias_m)
+        self.rng = np.random.default_rng(rng_seed)
+
+        if self.sample_rate_hz <= 0.0:
+            raise ValueError("CSV heave sample_rate_hz must be positive.")
+        if self.min_remaining_s < 0.0:
+            raise ValueError("CSV heave min_remaining_s must be non-negative.")
+
+        csv_paths = sorted(self.dataset_dir.glob("*.csv"))
+        if not csv_paths:
+            raise FileNotFoundError(f"No CSV datasets found in '{self.dataset_dir}'.")
+
+        min_remaining_samples = int(math.ceil(self.min_remaining_s * self.sample_rate_hz))
+        self._datasets: list[np.ndarray] = []
+        self._csv_paths = csv_paths
+        self._max_start_indices: list[int] = []
+        for csv_path in csv_paths:
+            with csv_path.open("r", encoding="utf-8") as file:
+                values = [float(line.strip()) for line in file if line.strip()]
+            if not values:
+                raise ValueError(f"CSV dataset '{csv_path}' is empty.")
+            if len(values) <= min_remaining_samples:
+                raise ValueError(
+                    f"CSV dataset '{csv_path}' has only {len(values)} samples; need more than "
+                    f"{min_remaining_samples} to leave at least {self.min_remaining_s:.1f}s after the chosen start."
+                )
+            self._datasets.append(np.asarray(values, dtype=np.float64))
+            self._max_start_indices.append(len(values) - min_remaining_samples - 1)
+
+        self.current_dataset_id = 0
+        self.current_dataset_path = self._csv_paths[0]
+        self.current_start_index = 0
+
+    def sample(self) -> None:
+        self.current_dataset_id = int(self.rng.integers(0, len(self._datasets)))
+        self.current_dataset_path = self._csv_paths[self.current_dataset_id]
+        max_start_index = self._max_start_indices[self.current_dataset_id]
+        self.current_start_index = int(self.rng.integers(0, max_start_index + 1))
+
+    def evaluate(self, time_s: float, dt: float) -> PlatformState:
+        del dt
+        dataset = self._datasets[self.current_dataset_id]
+        sample_position = self.current_start_index + max(float(time_s), 0.0) * self.sample_rate_hz
+        sample_position = float(np.clip(sample_position, 0.0, dataset.size - 1))
+        lower_idx = int(math.floor(sample_position))
+        upper_idx = min(lower_idx + 1, dataset.size - 1)
+        alpha = sample_position - float(lower_idx)
+
+        lower_value = float(dataset[lower_idx])
+        upper_value = float(dataset[upper_idx])
+        z_value = ((1.0 - alpha) * lower_value) + (alpha * upper_value)
+        z_velocity = (upper_value - lower_value) * self.sample_rate_hz
+
+        position = np.array(self.base_position, dtype=np.float64)
+        position[2] += self.bias_m + (self.scale * z_value)
+        linear_velocity = np.zeros((3,), dtype=np.float64)
+        linear_velocity[2] = self.scale * z_velocity
+
+        quat_xyzw = np.asarray((0.0, 0.0, 0.0, 1.0), dtype=np.float64)
+        quat_wxyz = np.asarray((1.0, 0.0, 0.0, 0.0), dtype=np.float64)
+        angular_velocity = np.zeros((3,), dtype=np.float64)
+
+        return PlatformState(
+            position=position.astype(np.float32),
+            quat_wxyz=quat_wxyz.astype(np.float32),
+            quat_xyzw=quat_xyzw.astype(np.float32),
+            linear_velocity=linear_velocity.astype(np.float32),
+            angular_velocity=angular_velocity.astype(np.float32),
+        )
+
+
 class MultiSineMotionProfile:
     """Single-platform version of the structured multi-sine generator used in vanilla."""
 
@@ -279,7 +369,8 @@ class MovingPlatform:
         prim_path: str = "/World/platform",
         texture_path: str,
         physics_dt: float,
-        stage_cfg: PlatformMotionStageCfg,
+        stage_cfg: PlatformMotionStageCfg | None = None,
+        motion_profile: MultiSineMotionProfile | CsvHeaveMotionProfile | None = None,
         rng_seed: int | None = None,
         size: tuple[float, float, float] = (1.0, 1.0, 0.2),
         base_position: tuple[float, float, float] = (0.0, 0.0, 0.1),
@@ -291,7 +382,12 @@ class MovingPlatform:
         self.physics_dt = float(physics_dt)
         self.size = tuple(float(x) for x in size)
         self.base_position = tuple(float(x) for x in base_position)
-        self.profile = MultiSineMotionProfile(stage_cfg, base_position=self.base_position, rng_seed=rng_seed)
+        if motion_profile is not None:
+            self.profile = motion_profile
+        else:
+            if stage_cfg is None:
+                raise ValueError("Either stage_cfg or motion_profile must be provided for MovingPlatform.")
+            self.profile = MultiSineMotionProfile(stage_cfg, base_position=self.base_position, rng_seed=rng_seed)
         self.current_state: PlatformState | None = None
         self._sim_time = 0.0
 

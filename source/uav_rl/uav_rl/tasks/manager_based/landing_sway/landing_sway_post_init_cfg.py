@@ -41,11 +41,11 @@ class LandingSwayRewardWeightsCfg:
     # mdp.raw_action_component_l2: penalize large raw policy yaw-rate action.
     action_magnitude_yaw_rate: float = -1.2
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vx action.
-    velocity_action_rate_x: float = -20.0
+    velocity_action_rate_x: float = -50.0
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vy action.
-    velocity_action_rate_y: float = -20.0
+    velocity_action_rate_y: float = -50.0
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vz action.
-    velocity_action_rate_z: float = -20.0
+    velocity_action_rate_z: float = -35.0
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
     uav_acceleration: float = -0.5
     # mdp.angular_rate_l2: penalize body angular rates.

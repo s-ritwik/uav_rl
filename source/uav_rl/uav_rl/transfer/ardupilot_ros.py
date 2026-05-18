@@ -394,7 +394,7 @@ class PlatformRos2Publisher:
         self.twist_pub = self.node.create_publisher(TwistStamped, platform_twist_topic(namespace, vehicle_id), 10)
 
     def publish(self, state):
-        if state is None:
+        if state is None or not rclpy.ok():
             return
 
         pose_msg = PoseStamped()
@@ -420,8 +420,11 @@ class PlatformRos2Publisher:
         twist_msg.twist.angular.y = float(state.angular_velocity[1])
         twist_msg.twist.angular.z = float(state.angular_velocity[2])
 
-        self.pose_pub.publish(pose_msg)
-        self.twist_pub.publish(twist_msg)
+        try:
+            self.pose_pub.publish(pose_msg)
+            self.twist_pub.publish(twist_msg)
+        except Exception:
+            return
 
     def destroy(self):
         try:

@@ -215,7 +215,6 @@ def touchdown_quality_reward(
     good_touchdown_reward: float = 4.0,
     bad_touchdown_reward: float = -5.0,
     center_proximity_bonus: float = 0.0,
-    low_touchdown_speed_bonus: float = 0.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="body"),
@@ -274,11 +273,6 @@ def touchdown_quality_reward(
         closeness = (1.0 - xy_error / xy_radius).clamp(0.0, 1.0)
         # Add an extra touchdown bonus that peaks at the exact platform center.
         good_reward = good_reward + float(center_proximity_bonus) * closeness
-    if float(low_touchdown_speed_bonus) != 0.0:
-        speed_radius = max(float(max_touchdown_speed_mps), 1.0e-6)
-        speed_closeness = (1.0 - descent_speed / speed_radius).clamp(0.0, 1.0)
-        # Add an extra touchdown bonus that peaks at zero descent speed.
-        good_reward = good_reward + float(low_touchdown_speed_bonus) * speed_closeness
 
     reward[just_touched] = torch.where(
         good[just_touched],
@@ -375,7 +369,7 @@ def angular_velocity_rate_l2(
     asset: RigidObject = env.scene[asset_cfg.name]
     current_ang_vel_b = asset.data.root_ang_vel_b
 
-    state_name = "_heave_landing_prev_root_ang_vel_b"
+    state_name = "_landing_sway_prev_root_ang_vel_b"
     prev_ang_vel_b = getattr(env, state_name, None)
     if prev_ang_vel_b is None or prev_ang_vel_b.shape != current_ang_vel_b.shape:
         setattr(env, state_name, current_ang_vel_b.clone())
