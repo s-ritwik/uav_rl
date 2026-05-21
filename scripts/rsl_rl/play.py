@@ -8,7 +8,9 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import csv
 import sys
+from typing import Sequence
 
 from isaaclab.app import AppLauncher
 
@@ -57,6 +59,18 @@ parser.add_argument(
     type=int,
     default=250,
     help="Number of play steps between termination-stat prints.",
+)
+parser.add_argument(
+    "--log_touchdown_velocities",
+    action="store_true",
+    default=False,
+    help="Log touchdown descent velocities to CSV during play only.",
+)
+parser.add_argument(
+    "--touchdown_velocity_log_file",
+    type=str,
+    default=None,
+    help="Optional CSV output path for touchdown-velocity samples.",
 )
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -139,6 +153,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     log_dir = os.path.dirname(resume_path)
+    touchdown_log_file = None
+    touchdown_log_handle = None
+    touchdown_log_writer = None
+    touchdown_log_count = 0
+    touchdown_log_warned = False
+
+    if args_cli.log_touchdown_velocities:
+        touchdown_log_file = args_cli.touchdown_velocity_log_file
+        if touchdown_log_file is None:
+            touchdown_log_file = os.path.join(
+                log_dir,
+                "analysis",
+                f"touchdown_velocities_play_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+            )
+        os.makedirs(os.path.dirname(touchdown_log_file), exist_ok=True)
+        touchdown_log_handle = open(touchdown_log_file, "w", newline="", encoding="utf-8")
+        touchdown_log_writer = csv.writer(touchdown_log_handle)
+        touchdown_log_writer.writerow(
+            [
+                "play_step",
+                "env_id",
+                "touchdown_speed_for_reward_mps",
+                "touchdown_force_n",
+                "touchdown_xy_error_m",
+                "touchdown_roll_rad",
+                "touchdown_pitch_rad",
+                "touchdown_yaw_rad",
+            ]
+        )
+        print(f"[INFO] Logging touchdown velocities to: {touchdown_log_file}")
 
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
@@ -164,6 +208,53 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+
+    if args_cli.log_touchdown_velocities:
+        orig_reset_idx = env.unwrapped._reset_idx
+
+        def _reset_idx_with_touchdown_logging(env_ids: Sequence[int]):
+            nonlocal touchdown_log_count, touchdown_log_warned
+            try:
+                env_ids_tensor = torch.as_tensor(env_ids, device=env.unwrapped.device, dtype=torch.long)
+                term_manager = getattr(env.unwrapped, "termination_manager", None)
+                touchdown_mask = None
+                if term_manager is not None:
+                    touchdown_mask = term_manager.get_term("touchdown").to(dtype=torch.bool)
+
+                pre_rel_vz = getattr(env.unwrapped, "_landing_touchdown_pre_rel_vz", None)
+                if touchdown_mask is not None and pre_rel_vz is not None and env_ids_tensor.numel() > 0:
+                    touchdown_env_ids = env_ids_tensor[touchdown_mask[env_ids_tensor]]
+                    if touchdown_env_ids.numel() > 0:
+                        touchdown_force = getattr(env.unwrapped, "_landing_touchdown_force_norm", None)
+                        touchdown_xy_error = getattr(env.unwrapped, "_landing_touchdown_xy_error", None)
+                        touchdown_roll = getattr(env.unwrapped, "_landing_touchdown_roll", None)
+                        touchdown_pitch = getattr(env.unwrapped, "_landing_touchdown_pitch", None)
+                        touchdown_yaw = getattr(env.unwrapped, "_landing_touchdown_yaw", None)
+                        descent_speed = (-pre_rel_vz[touchdown_env_ids]).clamp_min(0.0)
+
+                        for row_idx, env_id in enumerate(touchdown_env_ids.detach().cpu().tolist()):
+                            idx = int(env_id)
+                            touchdown_log_writer.writerow(
+                                [
+                                    int(env.unwrapped.common_step_counter),
+                                    idx,
+                                    float(descent_speed[row_idx].item()),
+                                    float(touchdown_force[idx].item()) if touchdown_force is not None else float("nan"),
+                                    float(touchdown_xy_error[idx].item()) if touchdown_xy_error is not None else float("nan"),
+                                    float(touchdown_roll[idx].item()) if touchdown_roll is not None else float("nan"),
+                                    float(touchdown_pitch[idx].item()) if touchdown_pitch is not None else float("nan"),
+                                    float(touchdown_yaw[idx].item()) if touchdown_yaw is not None else float("nan"),
+                                ]
+                            )
+                            touchdown_log_count += 1
+                        touchdown_log_handle.flush()
+            except Exception as exc:
+                if not touchdown_log_warned:
+                    print(f"[WARN] Touchdown logging hook failed: {exc}")
+                    touchdown_log_warned = True
+            return orig_reset_idx(env_ids)
+
+        env.unwrapped._reset_idx = _reset_idx_with_touchdown_logging
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
@@ -285,6 +376,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     if args_cli.termination_stats:
         print_termination_stats("[TERMINATION_STATS final]")
+    if touchdown_log_handle is not None:
+        touchdown_log_handle.close()
+        print(f"[INFO] Logged {touchdown_log_count} touchdown samples to: {touchdown_log_file}")
 
     # close the simulator
     env.close()

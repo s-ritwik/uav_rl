@@ -761,6 +761,11 @@ def _run(args) -> None:
             rel_pos[2] -= self.vehicle_z0_m
             return rel_pos
 
+        def _compute_rel_lin_vel_world(self) -> np.ndarray | None:
+            if self.robot_lin_vel_w is None or self.platform_lin_vel_w is None:
+                return None
+            return (self.robot_lin_vel_w - self.platform_lin_vel_w).astype(np.float32)
+
         def _check_and_trigger_proximity_disarm(self, now_sec: float) -> None:
             if not self.enable_proximity_disarm or self._proximity_disarm_done:
                 return
@@ -911,11 +916,14 @@ def _run(args) -> None:
                 self.step_count += 1
 
                 if args.debug_every > 0 and self.step_count % args.debug_every == 0:
+                    rel_pos = self._compute_rel_pos_world()
+                    rel_vel = self._compute_rel_lin_vel_world()
                     self._log_info(
                         f"policy_step={self.step_count} obs_z={float(obs[2]):.3f} "
                         f"raw_action={self.last_obs_action.tolist()} "
                         f"vel_sp={self.last_cmd_action[:3].tolist()} yaw_rate={float(self.last_cmd_action[3]):.3f}"
-                        f" rel_pos={self._compute_rel_pos_world().tolist() if self._compute_rel_pos_world() is not None else None}"
+                        f" rel_pos={None if rel_pos is None else rel_pos.tolist()}"
+                        f" rel_vel_true={None if rel_vel is None else rel_vel.tolist()}"
                     )
 
             self._publish_cmd(self.last_cmd_action[:3], float(self.last_cmd_action[3]))

@@ -314,19 +314,39 @@ class LandingSwayVisionObservationCfg:
     marker_offset_platform_m: tuple[float, float, float] = (0.0, 0.0, 0.1)
     marker_quat_platform_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     marker_size_m: float = 0.8
-    image_width_px: int = 640
-    image_height_px: int = 360
+    image_width_px: int = 1280
+    image_height_px: int = 720
     horizontal_fov_deg: float = 90.0
     vertical_fov_deg: float = 60.0
     min_visible_corners: int = 4
     min_depth_m: float = 0.05
     max_depth_m: float = 10.0
     detection_dropout_prob: float = 0.0
+    # Legacy alias kept for backward compatibility with earlier surrogate configs.
     measurement_timeout_s: float = 0.15
+    marker_timeout_s: float = 0.15
     position_noise_std_m: float = 0.01
     orientation_noise_std_rad: float = 0.01
+    # Translation filter / gating settings aligned with the in-process vision path.
+    position_only_filter: bool = True
+    pos_innov_threshold_m: float = 0.35
+    angle_innov_threshold_deg: float = 20.0
+    position_r_diagonal: float = 0.03
+    q_diagonal: float = 0.01
+    r_diagonal: float = 0.15
+    z_measurement_scale: float = 1.0
+    z_measurement_bias: float = 0.0
+    z_innov_threshold_m: float = 0.12
+    enable_z_output_smoother: bool = True
+    z_output_smoother_tau_s: float = 0.20
+    reinit_after_rejects: int = 3
+    # Legacy compatibility knobs from the pre-filter surrogate. They are kept so
+    # older overrides still deserialize cleanly, but the current translation
+    # filter does not use them.
     position_blend: float = 0.55
     velocity_blend: float = 0.35
+    # Still used to smooth the derived body-rate estimate from successive vision
+    # quaternion measurements.
     angular_velocity_blend: float = 0.35
 
 

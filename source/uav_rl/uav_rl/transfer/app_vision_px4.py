@@ -225,25 +225,25 @@ parser.add_argument(
 parser.add_argument(
     "--vision_render_width",
     type=int,
-    default=640,
+    default=1280,
     help="Target width for the onboard camera render product used by the vision detector.",
 )
 parser.add_argument(
     "--vision_render_height",
     type=int,
-    default=360,
+    default=720,
     help="Target height for the onboard camera render product used by the vision detector.",
 )
 parser.add_argument(
     "--vision_main_viewport_width",
     type=int,
-    default=640,
+    default=1280,
     help="Main Isaac viewport render width used when running the vision app non-headless.",
 )
 parser.add_argument(
     "--vision_main_viewport_height",
     type=int,
-    default=360,
+    default=720,
     help="Main Isaac viewport render height used when running the vision app non-headless.",
 )
 parser.add_argument(

@@ -401,7 +401,7 @@ class HeaveLandingEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 10
-        self.episode_length_s = 40.0
+        self.episode_length_s = 40.0 # timeout after 40 s
         self.post_init_cfg.apply(self)
 
         # Required so contact sensors receive contact reports from the USD articulation.

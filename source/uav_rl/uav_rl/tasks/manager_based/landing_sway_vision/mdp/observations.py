@@ -12,46 +12,83 @@ class _VisionObservationState:
         self.num_envs = num_envs
         self.device = torch.device(device)
         self.last_step = -1
+
+        self.filter_initialized = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
         self.filtered_pos = torch.zeros((num_envs, 3), device=self.device)
         self.filtered_vel = torch.zeros((num_envs, 3), device=self.device)
+        self.filtered_acc = torch.zeros((num_envs, 3), device=self.device)
         self.filtered_quat = _identity_quat(num_envs, self.device)
         self.filtered_ang_vel = torch.zeros((num_envs, 3), device=self.device)
+        self.position_cov = _batched_eye(9, num_envs, self.device, torch.float32) * 0.01
+
         self.last_seen_s = torch.full((num_envs,), -1.0e9, device=self.device)
+        self.reject_counts = torch.zeros(num_envs, dtype=torch.int32, device=self.device)
+        self.z_smoother_initialized = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        self.z_smoother_value = torch.zeros(num_envs, device=self.device)
+        self.z_smoother_time_s = torch.zeros(num_envs, device=self.device)
+
         self.raw_valid = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
         self.filtered_valid = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
         self.visible_fraction = torch.zeros(num_envs, device=self.device)
+        self.raw_pos = torch.zeros((num_envs, 3), device=self.device)
+        self.raw_quat = _identity_quat(num_envs, self.device)
+        self.raw_rpy_deg = torch.zeros((num_envs, 3), device=self.device)
+        self.filtered_rpy_deg = torch.zeros((num_envs, 3), device=self.device)
+
         self.cached_rel_pos = torch.zeros((num_envs, 3), device=self.device)
         self.cached_rel_lin_vel = torch.zeros((num_envs, 3), device=self.device)
         self.cached_rel_quat = _identity_quat(num_envs, self.device)
         self.cached_rel_ang_vel = torch.zeros((num_envs, 3), device=self.device)
         self.cached_line_of_sight = torch.zeros((num_envs, 3), device=self.device)
         self.cached_status = torch.zeros((num_envs, 4), device=self.device)
+        self.cached_raw_rel_pos = torch.zeros((num_envs, 3), device=self.device)
+        self.cached_raw_rel_quat = _identity_quat(num_envs, self.device)
+        self.cached_raw_rpy_deg = torch.zeros((num_envs, 3), device=self.device)
+        self.cached_filtered_rpy_deg = torch.zeros((num_envs, 3), device=self.device)
 
     def reset_envs(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:
             return
+        count = int(env_ids.numel())
+        self.filter_initialized[env_ids] = False
         self.filtered_pos[env_ids] = 0.0
         self.filtered_vel[env_ids] = 0.0
-        self.filtered_quat[env_ids] = _identity_quat(int(env_ids.numel()), self.device, dtype=self.filtered_quat.dtype)
+        self.filtered_acc[env_ids] = 0.0
+        self.filtered_quat[env_ids] = _identity_quat(count, self.device, dtype=self.filtered_quat.dtype)
         self.filtered_ang_vel[env_ids] = 0.0
+        self.position_cov[env_ids] = _batched_eye(9, count, self.device, self.position_cov.dtype) * 0.01
         self.last_seen_s[env_ids] = -1.0e9
+        self.reject_counts[env_ids] = 0
+        self.z_smoother_initialized[env_ids] = False
+        self.z_smoother_value[env_ids] = 0.0
+        self.z_smoother_time_s[env_ids] = 0.0
         self.raw_valid[env_ids] = False
         self.filtered_valid[env_ids] = False
         self.visible_fraction[env_ids] = 0.0
+        self.raw_pos[env_ids] = 0.0
+        self.raw_quat[env_ids] = _identity_quat(count, self.device, dtype=self.raw_quat.dtype)
+        self.raw_rpy_deg[env_ids] = 0.0
+        self.filtered_rpy_deg[env_ids] = 0.0
         self.cached_rel_pos[env_ids] = 0.0
         self.cached_rel_lin_vel[env_ids] = 0.0
-        self.cached_rel_quat[env_ids] = _identity_quat(
-            int(env_ids.numel()), self.device, dtype=self.cached_rel_quat.dtype
-        )
+        self.cached_rel_quat[env_ids] = _identity_quat(count, self.device, dtype=self.cached_rel_quat.dtype)
         self.cached_rel_ang_vel[env_ids] = 0.0
         self.cached_line_of_sight[env_ids] = 0.0
         self.cached_status[env_ids] = 0.0
+        self.cached_raw_rel_pos[env_ids] = 0.0
+        self.cached_raw_rel_quat[env_ids] = _identity_quat(count, self.device, dtype=self.cached_raw_rel_quat.dtype)
+        self.cached_raw_rpy_deg[env_ids] = 0.0
+        self.cached_filtered_rpy_deg[env_ids] = 0.0
 
 
 def _identity_quat(num_envs: int, device: torch.device | str, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     quat = torch.zeros((num_envs, 4), device=device, dtype=dtype)
     quat[:, 0] = 1.0
     return quat
+
+
+def _batched_eye(size: int, batch: int, device: torch.device | str, dtype: torch.dtype) -> torch.Tensor:
+    return torch.eye(size, device=device, dtype=dtype).unsqueeze(0).repeat(batch, 1, 1)
 
 
 def _expand_vector(values: tuple[float, ...], num_envs: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -79,12 +116,138 @@ def _apply_orientation_noise(quat_wxyz: torch.Tensor, std_rad: float, valid_mask
     return torch.where(valid_mask.unsqueeze(-1), noisy_quat, quat_wxyz)
 
 
+def _euler_xyz_deg_from_quat(quat_wxyz: torch.Tensor) -> torch.Tensor:
+    roll, pitch, yaw = math_utils.euler_xyz_from_quat(quat_wxyz)
+    return torch.stack((roll, pitch, yaw), dim=-1) * (180.0 / math.pi)
+
+
 def _get_vision_state(env) -> _VisionObservationState:
     state = getattr(env, "_landing_sway_vision_observation_state", None)
     if state is None or state.num_envs != env.num_envs:
         state = _VisionObservationState(env.num_envs, env.device)
         setattr(env, "_landing_sway_vision_observation_state", state)
     return state
+
+
+def _predict_position_filter(state: _VisionObservationState, env_ids: torch.Tensor, dt: float, q_diagonal: float) -> None:
+    if env_ids.numel() == 0:
+        return
+    pos = state.filtered_pos[env_ids]
+    vel = state.filtered_vel[env_ids]
+    acc = state.filtered_acc[env_ids]
+    quat = state.filtered_quat[env_ids]
+    ang_vel = state.filtered_ang_vel[env_ids]
+    cov = state.position_cov[env_ids]
+
+    state.filtered_pos[env_ids] = pos + vel * dt + 0.5 * acc * (dt * dt)
+    state.filtered_vel[env_ids] = vel + acc * dt
+    state.filtered_quat[env_ids] = _integrate_quaternion(quat, ang_vel, dt)
+
+    batch = int(env_ids.numel())
+    dtype = cov.dtype
+    device = cov.device
+    f = _batched_eye(9, batch, device, dtype)
+    f[:, 0:3, 3:6] = torch.eye(3, device=device, dtype=dtype) * dt
+    f[:, 0:3, 6:9] = torch.eye(3, device=device, dtype=dtype) * (0.5 * dt * dt)
+    f[:, 3:6, 6:9] = torch.eye(3, device=device, dtype=dtype) * dt
+    q = _batched_eye(9, batch, device, dtype) * float(q_diagonal)
+    state.position_cov[env_ids] = f @ cov @ torch.transpose(f, 1, 2) + q
+
+
+def _initialize_filter(
+    state: _VisionObservationState,
+    env_ids: torch.Tensor,
+    measured_pos: torch.Tensor,
+    measured_quat: torch.Tensor,
+) -> None:
+    if env_ids.numel() == 0:
+        return
+    batch = int(env_ids.numel())
+    dtype = state.filtered_pos.dtype
+    device = state.filtered_pos.device
+    state.filter_initialized[env_ids] = True
+    state.filtered_pos[env_ids] = measured_pos[env_ids]
+    state.filtered_vel[env_ids] = 0.0
+    state.filtered_acc[env_ids] = 0.0
+    state.filtered_quat[env_ids] = math_utils.quat_unique(measured_quat[env_ids])
+    state.filtered_ang_vel[env_ids] = 0.0
+    state.position_cov[env_ids] = _batched_eye(9, batch, device, dtype) * 0.01
+    state.reject_counts[env_ids] = 0
+    state.z_smoother_initialized[env_ids] = False
+    state.z_smoother_value[env_ids] = 0.0
+    state.z_smoother_time_s[env_ids] = 0.0
+
+
+def _update_position_filter(
+    state: _VisionObservationState,
+    env_ids: torch.Tensor,
+    measured_pos: torch.Tensor,
+    measured_quat: torch.Tensor,
+    dt: float,
+    position_r_diagonal: float,
+    ang_blend: float,
+) -> None:
+    if env_ids.numel() == 0:
+        return
+    cov = state.position_cov[env_ids]
+    batch = int(env_ids.numel())
+    dtype = cov.dtype
+    device = cov.device
+    r_pos = _batched_eye(3, batch, device, dtype) * float(position_r_diagonal)
+    hph_t = cov[:, 0:3, 0:3]
+    s = hph_t + r_pos
+    k = cov[:, :, 0:3] @ torch.linalg.inv(s)
+    innovation = measured_pos[env_ids] - state.filtered_pos[env_ids]
+    dx = (k @ innovation.unsqueeze(-1)).squeeze(-1)
+
+    state.filtered_pos[env_ids] = state.filtered_pos[env_ids] + dx[:, 0:3]
+    state.filtered_vel[env_ids] = state.filtered_vel[env_ids] + dx[:, 3:6]
+    state.filtered_acc[env_ids] = state.filtered_acc[env_ids] + dx[:, 6:9]
+
+    kh = torch.zeros_like(cov)
+    kh[:, :, 0:3] = k
+    i9 = _batched_eye(9, batch, device, dtype)
+    ikh = i9 - kh
+    state.position_cov[env_ids] = ikh @ cov @ torch.transpose(ikh, 1, 2) + k @ r_pos @ torch.transpose(k, 1, 2)
+
+    quat_error = math_utils.quat_mul(measured_quat[env_ids], math_utils.quat_inv(state.filtered_quat[env_ids]))
+    raw_ang_vel = math_utils.axis_angle_from_quat(quat_error) / max(float(dt), 1.0e-6)
+    state.filtered_ang_vel[env_ids] = torch.lerp(state.filtered_ang_vel[env_ids], raw_ang_vel, float(ang_blend))
+    state.filtered_quat[env_ids] = math_utils.quat_unique(measured_quat[env_ids])
+    state.reject_counts[env_ids] = 0
+
+
+def _apply_z_output_smoother(
+    state: _VisionObservationState,
+    z_values: torch.Tensor,
+    valid_mask: torch.Tensor,
+    now_s: float,
+    tau_s: float,
+) -> torch.Tensor:
+    output = z_values.clone()
+    invalid_mask = ~valid_mask
+    if bool(torch.any(invalid_mask)):
+        state.z_smoother_initialized[invalid_mask] = False
+        state.z_smoother_value[invalid_mask] = 0.0
+        state.z_smoother_time_s[invalid_mask] = 0.0
+
+    init_mask = valid_mask & ~state.z_smoother_initialized
+    if bool(torch.any(init_mask)):
+        state.z_smoother_initialized[init_mask] = True
+        state.z_smoother_value[init_mask] = z_values[init_mask]
+        state.z_smoother_time_s[init_mask] = float(now_s)
+        output[init_mask] = z_values[init_mask]
+
+    update_mask = valid_mask & state.z_smoother_initialized & ~init_mask
+    if bool(torch.any(update_mask)):
+        dt = torch.full_like(state.z_smoother_time_s[update_mask], float(now_s)) - state.z_smoother_time_s[update_mask]
+        alpha = 1.0 - torch.exp(-dt / max(float(tau_s), 1.0e-6))
+        smoothed = state.z_smoother_value[update_mask] + alpha * (z_values[update_mask] - state.z_smoother_value[update_mask])
+        state.z_smoother_value[update_mask] = smoothed
+        state.z_smoother_time_s[update_mask] = float(now_s)
+        output[update_mask] = smoothed
+
+    return output
 
 
 def _update_vision_cache(env) -> _VisionObservationState:
@@ -188,76 +351,110 @@ def _update_vision_cache(env) -> _VisionObservationState:
         valid_mask=raw_valid,
     )
 
-    prev_pos = state.filtered_pos.clone().to(dtype=dtype)
-    prev_vel = state.filtered_vel.clone().to(dtype=dtype)
-    prev_quat = state.filtered_quat.clone().to(dtype=dtype)
-    prev_ang_vel = state.filtered_ang_vel.clone().to(dtype=dtype)
-    prev_last_seen_s = state.last_seen_s.clone().to(dtype=dtype)
-    prev_filtered_valid = state.filtered_valid.clone()
+    state.raw_valid = raw_valid
+    state.visible_fraction = visible_fraction
+    state.raw_pos = torch.where(raw_valid.unsqueeze(-1), measured_pos, torch.zeros_like(measured_pos))
+    state.raw_quat = torch.where(
+        raw_valid.unsqueeze(-1),
+        measured_quat,
+        _identity_quat(num_envs, device, dtype=dtype),
+    )
+    state.raw_rpy_deg = torch.where(
+        raw_valid.unsqueeze(-1),
+        _euler_xyz_deg_from_quat(state.raw_quat),
+        torch.zeros_like(state.raw_rpy_deg),
+    )
 
-    timeout_s = float(vision_cfg.measurement_timeout_s)
-    within_timeout = prev_filtered_valid & ((now_s - prev_last_seen_s) <= timeout_s)
-    predicted_pos = prev_pos + prev_vel * step_dt
-    predicted_quat = _integrate_quaternion(prev_quat, prev_ang_vel, step_dt)
+    q_diagonal = float(getattr(vision_cfg, "q_diagonal", 0.01))
+    predict_ids = state.filter_initialized.nonzero(as_tuple=False).squeeze(-1)
+    _predict_position_filter(state, predict_ids, step_dt, q_diagonal)
 
-    state.filtered_pos = torch.where(within_timeout.unsqueeze(-1), predicted_pos, prev_pos)
-    state.filtered_quat = torch.where(within_timeout.unsqueeze(-1), predicted_quat, prev_quat)
-    state.filtered_vel = torch.where(within_timeout.unsqueeze(-1), prev_vel, torch.zeros_like(prev_vel))
-    state.filtered_ang_vel = torch.where(within_timeout.unsqueeze(-1), prev_ang_vel, torch.zeros_like(prev_ang_vel))
+    timeout_s = float(getattr(vision_cfg, "marker_timeout_s", vision_cfg.measurement_timeout_s))
+    timed_out_mask = (~raw_valid) & state.filter_initialized & ((now_s - state.last_seen_s) > timeout_s)
+    if bool(torch.any(timed_out_mask)):
+        state.filter_initialized[timed_out_mask] = False
+        state.reject_counts[timed_out_mask] = 0
+        state.z_smoother_initialized[timed_out_mask] = False
+        state.z_smoother_value[timed_out_mask] = 0.0
+        state.z_smoother_time_s[timed_out_mask] = 0.0
+        state.filtered_vel[timed_out_mask] = 0.0
+        state.filtered_acc[timed_out_mask] = 0.0
+        state.filtered_ang_vel[timed_out_mask] = 0.0
+
+    measured_pos_for_filter = measured_pos.clone()
+    measured_pos_for_filter[:, 2] = (
+        float(getattr(vision_cfg, "z_measurement_scale", 1.0)) * measured_pos_for_filter[:, 2]
+        + float(getattr(vision_cfg, "z_measurement_bias", 0.0))
+    )
+
+    init_mask = raw_valid & ~state.filter_initialized
+    init_ids = init_mask.nonzero(as_tuple=False).squeeze(-1)
+    _initialize_filter(state, init_ids, measured_pos_for_filter, measured_quat)
+
+    active_update_mask = raw_valid & state.filter_initialized & ~init_mask
+    if bool(torch.any(active_update_mask)):
+        pos_innov = torch.linalg.norm(measured_pos_for_filter - state.filtered_pos, dim=-1)
+        z_innov = torch.abs(measured_pos_for_filter[:, 2] - state.filtered_pos[:, 2])
+        quat_error = math_utils.quat_mul(measured_quat, math_utils.quat_inv(state.filtered_quat))
+        ang_innov_deg = torch.linalg.norm(math_utils.axis_angle_from_quat(quat_error), dim=-1) * (180.0 / math.pi)
+
+        accepted = active_update_mask
+        accepted &= pos_innov < float(getattr(vision_cfg, "pos_innov_threshold_m", 0.35))
+        accepted &= z_innov < float(getattr(vision_cfg, "z_innov_threshold_m", 0.12))
+        if not bool(getattr(vision_cfg, "position_only_filter", True)):
+            accepted &= ang_innov_deg < float(getattr(vision_cfg, "angle_innov_threshold_deg", 20.0))
+
+        accepted_ids = accepted.nonzero(as_tuple=False).squeeze(-1)
+        _update_position_filter(
+            state,
+            accepted_ids,
+            measured_pos_for_filter,
+            measured_quat,
+            step_dt,
+            float(getattr(vision_cfg, "position_r_diagonal", 0.03)),
+            float(getattr(vision_cfg, "angular_velocity_blend", 0.35)),
+        )
+
+        rejected_mask = active_update_mask & ~accepted
+        if bool(torch.any(rejected_mask)):
+            state.reject_counts[rejected_mask] = state.reject_counts[rejected_mask] + 1
+            reinit_mask = rejected_mask & (
+                state.reject_counts >= int(max(getattr(vision_cfg, "reinit_after_rejects", 3), 1))
+            )
+            reinit_ids = reinit_mask.nonzero(as_tuple=False).squeeze(-1)
+            _initialize_filter(state, reinit_ids, measured_pos_for_filter, measured_quat)
 
     if bool(torch.any(raw_valid)):
-        pos_blend = float(vision_cfg.position_blend)
-        vel_blend = float(vision_cfg.velocity_blend)
-        ang_blend = float(vision_cfg.angular_velocity_blend)
+        state.last_seen_s = torch.where(raw_valid, torch.full_like(state.last_seen_s, now_s), state.last_seen_s)
 
-        prior_valid_for_update = within_timeout & raw_valid
-        raw_vel = torch.zeros_like(measured_pos)
-        raw_vel[prior_valid_for_update] = (
-            measured_pos[prior_valid_for_update] - predicted_pos[prior_valid_for_update]
-        ) / step_dt
+    state.filtered_valid = state.filter_initialized & ((now_s - state.last_seen_s) <= timeout_s)
 
-        quat_error = math_utils.quat_mul(measured_quat, math_utils.quat_inv(predicted_quat))
-        raw_ang_vel = torch.zeros_like(measured_pos)
-        raw_ang_vel[prior_valid_for_update] = (
-            math_utils.axis_angle_from_quat(quat_error[prior_valid_for_update]) / step_dt
+    filtered_pos_output = state.filtered_pos.clone()
+    if bool(getattr(vision_cfg, "enable_z_output_smoother", True)):
+        filtered_pos_output[:, 2] = _apply_z_output_smoother(
+            state,
+            filtered_pos_output[:, 2],
+            state.filtered_valid,
+            now_s,
+            float(getattr(vision_cfg, "z_output_smoother_tau_s", 0.20)),
+        )
+    else:
+        _ = _apply_z_output_smoother(
+            state,
+            filtered_pos_output[:, 2],
+            torch.zeros_like(state.filtered_valid),
+            now_s,
+            1.0,
         )
 
-        updated_pos = torch.where(
-            prior_valid_for_update.unsqueeze(-1),
-            torch.lerp(predicted_pos, measured_pos, pos_blend),
-            measured_pos,
-        )
-        updated_vel = torch.where(
-            prior_valid_for_update.unsqueeze(-1),
-            torch.lerp(prev_vel, raw_vel, vel_blend),
-            raw_vel,
-        )
-        updated_quat = measured_quat
-        updated_ang_vel = torch.where(
-            prior_valid_for_update.unsqueeze(-1),
-            torch.lerp(prev_ang_vel, raw_ang_vel, ang_blend),
-            raw_ang_vel,
-        )
+    state.filtered_rpy_deg = torch.where(
+        state.filtered_valid.unsqueeze(-1),
+        _euler_xyz_deg_from_quat(state.filtered_quat),
+        torch.zeros_like(state.filtered_rpy_deg),
+    )
 
-        state.filtered_pos = torch.where(raw_valid.unsqueeze(-1), updated_pos, state.filtered_pos)
-        state.filtered_vel = torch.where(raw_valid.unsqueeze(-1), updated_vel, state.filtered_vel)
-        state.filtered_quat = torch.where(raw_valid.unsqueeze(-1), updated_quat, state.filtered_quat)
-        state.filtered_ang_vel = torch.where(raw_valid.unsqueeze(-1), updated_ang_vel, state.filtered_ang_vel)
-        state.last_seen_s = torch.where(raw_valid, torch.full_like(prev_last_seen_s, now_s), state.last_seen_s)
-
-    state.raw_valid = raw_valid
-    state.filtered_valid = raw_valid | within_timeout
-    state.visible_fraction = visible_fraction
-
-    stale_mask = ~state.filtered_valid
-    if bool(torch.any(stale_mask)):
-        state.filtered_pos[stale_mask] = 0.0
-        state.filtered_vel[stale_mask] = 0.0
-        state.filtered_quat[stale_mask] = _identity_quat(int(stale_mask.sum().item()), device, dtype=dtype)
-        state.filtered_ang_vel[stale_mask] = 0.0
-
-    line_of_sight_norm = torch.linalg.norm(state.filtered_pos, dim=-1, keepdim=True).clamp(min=1.0e-6)
-    line_of_sight = state.filtered_pos / line_of_sight_norm
+    line_of_sight_norm = torch.linalg.norm(filtered_pos_output, dim=-1, keepdim=True).clamp(min=1.0e-6)
+    line_of_sight = filtered_pos_output / line_of_sight_norm
     line_of_sight = torch.where(state.filtered_valid.unsqueeze(-1), line_of_sight, torch.zeros_like(line_of_sight))
 
     age_fraction = torch.clamp(
@@ -273,7 +470,7 @@ def _update_vision_cache(env) -> _VisionObservationState:
     )
 
     state.cached_rel_pos = torch.where(
-        state.filtered_valid.unsqueeze(-1), state.filtered_pos, torch.zeros_like(state.filtered_pos)
+        state.filtered_valid.unsqueeze(-1), filtered_pos_output, torch.zeros_like(filtered_pos_output)
     )
     state.cached_rel_lin_vel = torch.where(
         state.filtered_valid.unsqueeze(-1), state.filtered_vel, torch.zeros_like(state.filtered_vel)
@@ -291,6 +488,18 @@ def _update_vision_cache(env) -> _VisionObservationState:
             age_fraction,
         ],
         dim=-1,
+    )
+    state.cached_raw_rel_pos = torch.where(raw_valid.unsqueeze(-1), state.raw_pos, torch.zeros_like(state.raw_pos))
+    state.cached_raw_rel_quat = torch.where(
+        raw_valid.unsqueeze(-1),
+        state.raw_quat,
+        _identity_quat(num_envs, device, dtype=dtype),
+    )
+    state.cached_raw_rpy_deg = torch.where(raw_valid.unsqueeze(-1), state.raw_rpy_deg, torch.zeros_like(state.raw_rpy_deg))
+    state.cached_filtered_rpy_deg = torch.where(
+        state.filtered_valid.unsqueeze(-1),
+        state.filtered_rpy_deg,
+        torch.zeros_like(state.filtered_rpy_deg),
     )
     state.last_step = step
     return state
@@ -318,3 +527,19 @@ def vision_line_of_sight(env) -> torch.Tensor:
 
 def vision_status(env) -> torch.Tensor:
     return _update_vision_cache(env).cached_status
+
+
+def vision_raw_rel_pos(env) -> torch.Tensor:
+    return _update_vision_cache(env).cached_raw_rel_pos
+
+
+def vision_raw_rel_quat(env) -> torch.Tensor:
+    return _update_vision_cache(env).cached_raw_rel_quat
+
+
+def vision_raw_rpy_deg(env) -> torch.Tensor:
+    return _update_vision_cache(env).cached_raw_rpy_deg
+
+
+def vision_filtered_rpy_deg(env) -> torch.Tensor:
+    return _update_vision_cache(env).cached_filtered_rpy_deg

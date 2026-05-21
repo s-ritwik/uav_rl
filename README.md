@@ -1,6 +1,6 @@
 # UAV RL
 
-This repository contains a manager-based UAV RL stack built on Isaac Lab. The current focus is reproducible quadrotor training, evaluation, and transfer using an Iris vehicle model.
+This repository contains a manager-based UAV RL stack built on Isaac Lab. The current focus is reproducible quadrotor training, evaluation, and transfer using Iris-based vehicle variants.
 
 Pegasus Simulator is required for the PX4 and transfer workflows:
 https://pegasussimulator.github.io/PegasusSimulator/source/setup/installation.html
@@ -16,7 +16,7 @@ https://pegasussimulator.github.io/PegasusSimulator/source/setup/installation.ht
 Current focus:
 
 - Manager-based UAV tasks in Isaac Lab
-- PX4-like velocity-control action pipeline on an Iris quadrotor asset
+- PX4-like velocity-control action pipeline on Iris quadrotor variants
 - RSL-RL training, checkpoint playback, and transfer app tooling
 
 ## Installation
@@ -118,19 +118,27 @@ This is the intended path for new policies:
 - fine-tune with `finetune_px4`
 - deploy with `transfer/app_px4.py` and `transfer/publish_policy.py`
 
+## Available UAVs
+
+| UAV | Notes |
+|-----|-------|
+| IRIS with legs | Legged Iris airframe used by the landing tasks |
+| IRIS | Base Iris quadrotor configuration |
+| IRIS with camera | Iris airframe with onboard camera for vision-based landing |
+
 ## RL Tasks
 
 RL Task list:
 
-| Task | Robot | Hardware Tested? | Description |
-|------|:-----:|:----------------:|-------------|
-| `vanilla` | IRIS | ❌ | High-throughput training task using the in-repo PX4-like controller |
-| `finetune_px4` | IRIS | ❌ | PX4 SITL fine-tuning task intended for `4-8` envs |
-| `finetune_ardu` | IRIS | ❌ | ArduPilot SITL fine-tuning task. Experimental and not yet reliable |
+| Task | Registered ID | Robot | Hardware Tested? | Description |
+|------|---------------|:-----:|:----------------:|-------------|
+| sway_landing | `landing_sway` | IRIS with legs | ✅ | Sway-compensation landing task for moving-platform landing |
+| heave_landing | `heave_landing` | IRIS with legs | ✅ | Heave landing task. GRU variant is also implemented as `heave_landing_gru` |
+| sway_landing_vision | `landing_sway_vision` | IRIS with camera | ❌ | Vision-based sway landing task using onboard camera observations |
 
-## Task Channel Breakdown (`vanilla`)
+## Task Channel Breakdown (Legacy `vanilla` Reference)
 
-The `vanilla` environment is currently the center of development.
+The section below is retained as a reference for the older `vanilla` environment and its action/observation contract.
 
 Action channel (policy output):
 
@@ -164,7 +172,7 @@ Environment defaults:
 - `episode_length_s=10.0`
 
 
-## PX4-Like Control/Data Flow (`vanilla`)
+## PX4-Like Control/Data Flow (Legacy `vanilla` Reference)
 
 This task uses a PX4-style cascaded controller implemented in Torch and executed inside the Isaac Lab action term.
 
