@@ -80,16 +80,47 @@ def _filtered_msg_from_payload(payload: dict) -> LandingTargetVision:
     return msg
 
 
+def _true_msg_from_payload(payload: dict) -> LandingTargetVision:
+    truth = payload["true"]
+    msg = LandingTargetVision()
+    msg.header.stamp.sec = int(payload.get("header_stamp_sec", 0))
+    msg.header.stamp.nanosec = int(payload.get("header_stamp_nanosec", 0))
+    msg.header.frame_id = "ARpose_true"
+    msg.target_type = LandingTargetVision.STATIONARY
+    valid = bool(truth.get("valid", False))
+    msg.rel_pos_valid = 1 if valid else 0
+    msg.rel_vel_valid = 1 if valid else 0
+
+    msg.pose.position.x = float(truth["position_m"][0])
+    msg.pose.position.y = float(truth["position_m"][1])
+    msg.pose.position.z = float(truth["position_m"][2])
+    msg.pose.orientation = _quat_from_payload(truth["quat_xyzw"])
+    msg.rel_vel.x = float(truth["velocity_mps"][0])
+    msg.rel_vel.y = float(truth["velocity_mps"][1])
+    msg.rel_vel.z = float(truth["velocity_mps"][2])
+    msg.euler_angle.x = float(truth["euler_deg"][0])
+    msg.euler_angle.y = float(truth["euler_deg"][1])
+    msg.euler_angle.z = float(truth["euler_deg"][2])
+    msg.angle_norm = 2.0 * math.sqrt(
+        float(truth["quat_xyzw"][0]) ** 2
+        + float(truth["quat_xyzw"][1]) ** 2
+        + float(truth["quat_xyzw"][2]) ** 2
+    ) * 180.0 / math.pi
+    return msg
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Publish LandingTargetVision topics from newline-delimited JSON.")
     parser.add_argument("--raw-topic", required=True)
     parser.add_argument("--filtered-topic", required=True)
+    parser.add_argument("--true-topic", default="")
     args = parser.parse_args()
 
     rclpy.init()
     node = rclpy.create_node("uav_rl_vision_pose_publisher")
     raw_pub = node.create_publisher(LandingTargetVision, args.raw_topic, 10)
     filtered_pub = node.create_publisher(LandingTargetVision, args.filtered_topic, 10)
+    true_pub = node.create_publisher(LandingTargetVision, args.true_topic, 10) if args.true_topic else None
 
     try:
         while rclpy.ok():
@@ -107,8 +138,12 @@ def main() -> int:
             if not line:
                 continue
             payload = json.loads(line)
-            raw_pub.publish(_raw_msg_from_payload(payload))
-            filtered_pub.publish(_filtered_msg_from_payload(payload))
+            if "raw" in payload:
+                raw_pub.publish(_raw_msg_from_payload(payload))
+            if "filtered" in payload:
+                filtered_pub.publish(_filtered_msg_from_payload(payload))
+            if true_pub is not None and "true" in payload:
+                true_pub.publish(_true_msg_from_payload(payload))
     finally:
         try:
             node.destroy_node()
@@ -123,4 +158,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

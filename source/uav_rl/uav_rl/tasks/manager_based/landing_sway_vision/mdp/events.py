@@ -52,6 +52,7 @@ def add_platform_top_decal(
     texture_path: str,
     platform_name: str = "platform",
     platform_size: tuple[float, float, float] = (1.0, 1.0, 0.2),
+    decal_size_xy: tuple[float, float] | None = None,
     decal_z_offset: float = 5.0e-4,
 ) -> None:
     """Create a thin textured quad on top of each per-env platform."""
@@ -92,8 +93,11 @@ def add_platform_top_decal(
     )
     material.CreateSurfaceOutput().ConnectToSource(pbr_shader.ConnectableAPI(), "surface")
 
-    half_x = 0.5 * float(platform_size[0])
-    half_y = 0.5 * float(platform_size[1])
+    if decal_size_xy is None:
+        decal_size_xy = (float(platform_size[0]), float(platform_size[1]))
+
+    half_x = 0.5 * float(decal_size_xy[0])
+    half_y = 0.5 * float(decal_size_xy[1])
     top_z = 0.5 * float(platform_size[2]) + float(decal_z_offset)
 
     for env_prim_path in env.scene.env_prim_paths:

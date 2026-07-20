@@ -21,6 +21,7 @@ class VisionPoseTopicsConfig:
     enabled: bool
     raw_pose_topic: str
     filtered_pose_topic: str
+    true_pose_topic: str
     workspace_setup: str
 
 
@@ -72,7 +73,8 @@ class VisionPoseTopicPublisherProcess:
             f"{_ros_shell_prefix(self.config.workspace_setup)} && "
             f"exec /usr/bin/python3 {script_path} "
             f"--raw-topic {shlex.quote(self.config.raw_pose_topic)} "
-            f"--filtered-topic {shlex.quote(self.config.filtered_pose_topic)}"
+            f"--filtered-topic {shlex.quote(self.config.filtered_pose_topic)} "
+            f"--true-topic {shlex.quote(self.config.true_pose_topic)}"
         )
         self.process = subprocess.Popen(
             ["/bin/bash", "-lc", cmd],
@@ -84,7 +86,7 @@ class VisionPoseTopicPublisherProcess:
             start_new_session=True,
         )
 
-    def publish_estimate(self, estimate: "VisionPoseEstimate") -> None:
+    def publish_estimate(self, estimate: "VisionPoseEstimate", true_payload: dict | None = None) -> None:
         if self.process is None or self.process.stdin is None or self.process.poll() is not None:
             return
         payload = {
@@ -104,6 +106,24 @@ class VisionPoseTopicPublisherProcess:
                 "quat_xyzw": estimate.filtered_quat_xyzw.tolist(),
                 "euler_deg": estimate.filtered_rpy_deg.tolist(),
             },
+        }
+        if true_payload is not None:
+            payload["true"] = true_payload
+        try:
+            self.process.stdin.write(json.dumps(payload) + "\n")
+            self.process.stdin.flush()
+        except BrokenPipeError:
+            pass
+        except Exception:
+            pass
+
+    def publish_true_pose(self, true_payload: dict, *, header_stamp_sec: int = 0, header_stamp_nanosec: int = 0) -> None:
+        if self.process is None or self.process.stdin is None or self.process.poll() is not None:
+            return
+        payload = {
+            "header_stamp_sec": int(header_stamp_sec),
+            "header_stamp_nanosec": int(header_stamp_nanosec),
+            "true": true_payload,
         }
         try:
             self.process.stdin.write(json.dumps(payload) + "\n")

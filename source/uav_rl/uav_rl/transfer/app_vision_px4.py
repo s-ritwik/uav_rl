@@ -143,9 +143,15 @@ parser.add_argument(
     help="Filtered vision pose topic from the fractal detector.",
 )
 parser.add_argument(
+    "--vision_true_pose_topic",
+    type=str,
+    default="/ar_pose/true",
+    help="Ground-truth relative pose topic from the UAV root to the platform top center.",
+)
+parser.add_argument(
     "--vision_marker_size_m",
     type=float,
-    default=1.0,
+    default=0.70,
     help="Physical fractal marker size in meters passed to the detector.",
 )
 parser.add_argument(
@@ -213,43 +219,43 @@ parser.add_argument(
 parser.add_argument(
     "--vision_camera_frame_skip",
     type=int,
-    default=5,
-    help="frameSkipCount applied to embedded ROS camera publishers; 5 means publish every 6th rendered frame.",
+    default=1,
+    help="frameSkipCount applied to embedded ROS camera publishers; 1 means publish every 2nd rendered frame.",
 )
 parser.add_argument(
     "--vision_camera_queue_size",
     type=int,
-    default=2,
+    default=4,
     help="queueSize applied to embedded ROS camera publishers.",
 )
 parser.add_argument(
     "--vision_render_width",
     type=int,
-    default=1280,
+    default=1920,
     help="Target width for the onboard camera render product used by the vision detector.",
 )
 parser.add_argument(
     "--vision_render_height",
     type=int,
-    default=720,
+    default=1080,
     help="Target height for the onboard camera render product used by the vision detector.",
 )
 parser.add_argument(
     "--vision_main_viewport_width",
     type=int,
-    default=1280,
+    default=1920,
     help="Main Isaac viewport render width used when running the vision app non-headless.",
 )
 parser.add_argument(
     "--vision_main_viewport_height",
     type=int,
-    default=720,
+    default=1080,
     help="Main Isaac viewport render height used when running the vision app non-headless.",
 )
 parser.add_argument(
     "--vision_detector_camera_fps",
     type=float,
-    default=10.0,
+    default=20.0,
     help="Camera FPS hint passed to the external fractal detector.",
 )
 parser.add_argument(
@@ -320,7 +326,7 @@ def _bootstrap_isaac_ros2_python():
 
 _bootstrap_isaac_ros2_python()
 
-IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_cam.usd").resolve())
+IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_cam_1080.usd").resolve())
 PLATFORM_SIZE = (1.0, 1.0, 0.2)
 PLATFORM_ARUCO_TEXTURE_PATH = (
     Path(__file__).resolve().parents[1] / "assets" / "Aruco" / "aruco_mark_fractal.png"
@@ -872,6 +878,7 @@ class VehicleStateRos2Publisher(Backend):
         self.twist_inertial_pub = self.node.create_publisher(
             TwistStamped, twist_inertial_topic(namespace, vehicle_id), 10
         )
+        self.latest_state = None
 
         carb.log_warn(
             "[transfer.app_px4] state publisher for drone%d on %s, %s, %s"
@@ -890,6 +897,7 @@ class VehicleStateRos2Publisher(Backend):
         return
 
     def update_state(self, state):
+        self.latest_state = state
         stamp = self.node.get_clock().now().to_msg()
 
         pose = PoseStamped()
@@ -1109,6 +1117,7 @@ class PegasusApp:
             size=PLATFORM_SIZE,
             base_position=(args_cli.platform_x, args_cli.platform_y, args_cli.platform_z),
             add_top_decal=True,
+            top_decal_size_xy=(float(args_cli.vision_marker_size_m), float(args_cli.vision_marker_size_m)),
         )
         self._apply_platform_physics_material()
         self.world.add_physics_callback("platform_motion", self._on_platform_physics_step)
@@ -1406,6 +1415,7 @@ class PegasusApp:
                 enabled=True,
                 raw_pose_topic=args_cli.vision_raw_pose_topic,
                 filtered_pose_topic=args_cli.vision_filtered_pose_topic,
+                true_pose_topic=args_cli.vision_true_pose_topic,
                 workspace_setup=args_cli.vision_workspace_setup,
             )
         )
@@ -1418,6 +1428,55 @@ class PegasusApp:
             f"detector_fps={self.vision_system.config.detector_fps:.1f} "
             f"start_mode='{args_cli.vision_start_mode}'"
         )
+
+    def _compute_true_ar_pose_payload(self) -> dict | None:
+        if not self.state_publishers:
+            return None
+        vehicle_state = getattr(self.state_publishers[0], "latest_state", None)
+        platform_state = self.platform.current_state
+        if vehicle_state is None or platform_state is None:
+            return None
+
+        robot_pos_w = np.asarray(vehicle_state.position, dtype=np.float64)
+        robot_quat_xyzw = np.asarray(vehicle_state.attitude, dtype=np.float64)
+        robot_vel_w = np.asarray(vehicle_state.linear_velocity, dtype=np.float64)
+
+        platform_quat_xyzw = np.asarray(platform_state.quat_xyzw, dtype=np.float64)
+        platform_vel_w = np.asarray(platform_state.linear_velocity, dtype=np.float64)
+
+        rot_platform = Rotation.from_quat(platform_quat_xyzw)
+        platform_top_offset_w = rot_platform.apply(np.array([0.0, 0.0, 0.5 * float(PLATFORM_SIZE[2])], dtype=np.float64))
+        platform_top_pos_w = np.asarray(platform_state.position, dtype=np.float64) + platform_top_offset_w
+        rel_pos_w = robot_pos_w - platform_top_pos_w
+        rel_pos_platform = rot_platform.inv().apply(rel_pos_w)
+
+        rel_vel_w = robot_vel_w - platform_vel_w
+        rel_vel_platform = rot_platform.inv().apply(rel_vel_w)
+
+        rel_rot = rot_platform.inv() * Rotation.from_quat(robot_quat_xyzw)
+        rel_quat_xyzw = rel_rot.as_quat().astype(np.float64)
+        roll, pitch, yaw = rel_rot.as_euler("xyz", degrees=False)
+        rel_rpy_deg = np.array([roll, pitch, yaw], dtype=np.float64) * (180.0 / math.pi)
+
+        return {
+            "valid": True,
+            "position_m": rel_pos_platform.tolist(),
+            "velocity_mps": rel_vel_platform.tolist(),
+            "quat_xyzw": rel_quat_xyzw.tolist(),
+            "euler_deg": rel_rpy_deg.tolist(),
+        }
+
+    def _get_true_pose_stamp(self) -> tuple[int, int]:
+        if self.state_publishers:
+            node = getattr(self.state_publishers[0], "node", None)
+            if node is not None:
+                try:
+                    stamp = node.get_clock().now().to_msg()
+                    return int(stamp.sec), int(stamp.nanosec)
+                except Exception:
+                    pass
+        wall_ns = time.time_ns()
+        return int(wall_ns // 1_000_000_000), int(wall_ns % 1_000_000_000)
 
     def _handle_signal(self, signum, _frame):
         self._signal_count += 1
@@ -1511,10 +1570,26 @@ class PegasusApp:
                     render_frame = render_frame or self.vision_system.needs_render(now_s)
                 self.world.step(render=render_frame)
                 self._maybe_start_vision_system()
+                estimate = None
+                true_payload = None
+                true_stamp_sec = 0
+                true_stamp_nanosec = 0
+                if self.vision_pose_publisher is not None:
+                    true_payload = self._compute_true_ar_pose_payload()
+                    if true_payload is not None:
+                        true_stamp_sec, true_stamp_nanosec = self._get_true_pose_stamp()
                 if self.vision_system is not None:
                     estimate = self.vision_system.update()
                     if estimate is not None and self.vision_pose_publisher is not None:
-                        self.vision_pose_publisher.publish_estimate(estimate)
+                        self.vision_pose_publisher.publish_estimate(
+                            estimate, true_payload=true_payload
+                        )
+                if self.vision_pose_publisher is not None and true_payload is not None and estimate is None:
+                    self.vision_pose_publisher.publish_true_pose(
+                        true_payload,
+                        header_stamp_sec=true_stamp_sec,
+                        header_stamp_nanosec=true_stamp_nanosec,
+                    )
                 if self.vision_pose_publisher is not None:
                     self.vision_pose_publisher.update()
                 if self.platform_motion_enabled and not self.platform_motion_started and self.velocity_bridges:

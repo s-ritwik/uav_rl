@@ -142,6 +142,7 @@ class EventCfg:
         params={
             "platform_name": "platform",
             "platform_size": (1.0, 1.0, 0.2),
+            "decal_size_xy": (0.70, 0.70),
             "texture_path": str(PLATFORM_ARUCO_TEXTURE_PATH),
         },
     )

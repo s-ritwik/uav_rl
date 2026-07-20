@@ -313,32 +313,32 @@ class LandingSwayVisionObservationCfg:
     camera_quat_body_wxyz: tuple[float, float, float, float] = (0.0, 1.0, 0.0, 0.0)
     marker_offset_platform_m: tuple[float, float, float] = (0.0, 0.0, 0.1)
     marker_quat_platform_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
-    marker_size_m: float = 0.8
+    marker_size_m: float = 0.70
     image_width_px: int = 1280
     image_height_px: int = 720
-    horizontal_fov_deg: float = 90.0
-    vertical_fov_deg: float = 60.0
+    horizontal_fov_deg: float = 67.95
+    vertical_fov_deg: float = 41.41
     min_visible_corners: int = 4
     min_depth_m: float = 0.05
     max_depth_m: float = 10.0
     detection_dropout_prob: float = 0.0
     # Legacy alias kept for backward compatibility with earlier surrogate configs.
-    measurement_timeout_s: float = 0.15
-    marker_timeout_s: float = 0.15
+    measurement_timeout_s: float = 0.30
+    marker_timeout_s: float = 0.30
     position_noise_std_m: float = 0.01
     orientation_noise_std_rad: float = 0.01
     # Translation filter / gating settings aligned with the in-process vision path.
     position_only_filter: bool = True
-    pos_innov_threshold_m: float = 0.35
+    pos_innov_threshold_m: float = 0.50
     angle_innov_threshold_deg: float = 20.0
     position_r_diagonal: float = 0.03
     q_diagonal: float = 0.01
     r_diagonal: float = 0.15
     z_measurement_scale: float = 1.0
     z_measurement_bias: float = 0.0
-    z_innov_threshold_m: float = 0.12
+    z_innov_threshold_m: float = 0.25
     enable_z_output_smoother: bool = True
-    z_output_smoother_tau_s: float = 0.20
+    z_output_smoother_tau_s: float = 0.30
     reinit_after_rejects: int = 3
     # Legacy compatibility knobs from the pre-filter surrogate. They are kept so
     # older overrides still deserialize cleanly, but the current translation
@@ -417,6 +417,10 @@ class LandingSwayVisionPostInitCfg:
         env_cfg.events.move_platform.params["stage_cfg"] = self.platform_motion.stage_cfg
         env_cfg.events.move_platform.params["stationary_env_probability"] = float(
             self.platform_motion.stationary_env_probability
+        )
+        env_cfg.events.add_platform_top_decal.params["decal_size_xy"] = (
+            float(self.vision_observation.marker_size_m),
+            float(self.vision_observation.marker_size_m),
         )
 
         env_cfg.events.reset_root.params["pose_range"] = self.reset_spawn.pose_range.as_dict()

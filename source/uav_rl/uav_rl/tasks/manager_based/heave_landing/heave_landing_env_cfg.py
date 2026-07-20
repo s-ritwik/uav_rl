@@ -306,6 +306,8 @@ class RewardsCfg:
             "bad_touchdown_reward": -2.0,
             "center_proximity_bonus": 0.0,
             "low_touchdown_speed_bonus": 0.0,
+            "low_platform_vertical_speed_bonus": 0.0,
+            "platform_vertical_speed_bonus_scale_mps": 0.25,
             "asset_cfg": SceneEntityCfg("robot"),
             "reference_asset_cfg": SceneEntityCfg("platform"),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),

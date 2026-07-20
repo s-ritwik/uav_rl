@@ -31,21 +31,21 @@ class InProcessVisionConfig:
     camera_matrix: np.ndarray
     distortion_coefficients: np.ndarray
     camera_to_uav_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    detector_fps: float = 10.0
+    detector_fps: float = 20.0
     resolution: tuple[int, int] = (640, 360)
     display_scale: float = 0.5
     enable_overlay: bool = True
-    marker_timeout_s: float = 0.1
-    pos_innov_threshold_m: float = 0.35
+    marker_timeout_s: float = 0.30
+    pos_innov_threshold_m: float = 0.50
     angle_innov_threshold_deg: float = 20.0
     position_r_diagonal: float = 0.03
     q_diagonal: float = 0.01
     r_diagonal: float = 0.15
     z_measurement_scale: float = 1.0
     z_measurement_bias: float = 0.0
-    z_innov_threshold_m: float = 0.12
+    z_innov_threshold_m: float = 0.25
     enable_z_output_smoother: bool = True
-    z_output_smoother_tau_s: float = 0.20
+    z_output_smoother_tau_s: float = 0.30
     reinit_after_rejects: int = 3
     position_only_filter: bool = True
     window_name: str = "Onboard Vision"
@@ -242,6 +242,28 @@ class InProcessFractalVisionSystem:
             params = cv2.aruco.DetectorParameters_create()
         if hasattr(params, "cornerRefinementMethod"):
             params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        if hasattr(params, "cornerRefinementWinSize"):
+            params.cornerRefinementWinSize = 5
+        if hasattr(params, "adaptiveThreshWinSizeMin"):
+            params.adaptiveThreshWinSizeMin = 3
+        if hasattr(params, "adaptiveThreshWinSizeMax"):
+            params.adaptiveThreshWinSizeMax = 61
+        if hasattr(params, "adaptiveThreshWinSizeStep"):
+            params.adaptiveThreshWinSizeStep = 4
+        if hasattr(params, "adaptiveThreshConstant"):
+            params.adaptiveThreshConstant = 7.0
+        if hasattr(params, "minMarkerPerimeterRate"):
+            params.minMarkerPerimeterRate = 0.01
+        if hasattr(params, "maxMarkerPerimeterRate"):
+            params.maxMarkerPerimeterRate = 4.0
+        if hasattr(params, "polygonalApproxAccuracyRate"):
+            params.polygonalApproxAccuracyRate = 0.05
+        if hasattr(params, "minCornerDistanceRate"):
+            params.minCornerDistanceRate = 0.01
+        if hasattr(params, "minDistanceToBorder"):
+            params.minDistanceToBorder = 3
+        if hasattr(params, "errorCorrectionRate"):
+            params.errorCorrectionRate = 0.8
         return params
 
     @classmethod
@@ -420,6 +442,7 @@ class InProcessFractalVisionSystem:
 
         overlay = frame_bgr.copy()
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        gray_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
 
         detected_markers: list[tuple[np.ndarray, int]] = []
         object_points: list[np.ndarray] = []
@@ -431,8 +454,12 @@ class InProcessFractalVisionSystem:
             params = bundle["params"]
             if detector is not None:
                 corners_list, ids, _ = detector.detectMarkers(gray)
+                if ids is None or len(ids) == 0:
+                    corners_list, ids, _ = detector.detectMarkers(gray_clahe)
             else:
                 corners_list, ids, _ = cv2.aruco.detectMarkers(gray, dictionary, parameters=params)
+                if ids is None or len(ids) == 0:
+                    corners_list, ids, _ = cv2.aruco.detectMarkers(gray_clahe, dictionary, parameters=params)
             if ids is None or len(ids) == 0:
                 continue
 

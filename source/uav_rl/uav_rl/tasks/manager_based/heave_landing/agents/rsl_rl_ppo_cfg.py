@@ -56,7 +56,7 @@ class HeaveLandingFfPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=5e-3,
         num_learning_epochs=5,
         num_mini_batches=4,
-        learning_rate=1.0e-4,
+        learning_rate=1.0e-6,
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
@@ -99,11 +99,11 @@ class HeaveLandingGruPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=5e-3,
         num_learning_epochs=5,
         num_mini_batches=6,
-        learning_rate=1.0e-6,
+        learning_rate=5.0e-7,
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=1e-2,
+        desired_kl=5e-3,
         max_grad_norm=1.0,
     )
 

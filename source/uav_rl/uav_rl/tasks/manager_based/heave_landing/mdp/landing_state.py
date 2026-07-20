@@ -31,6 +31,7 @@ def _ensure_state(env):
         env._landing_touchdown_flag = torch.zeros(num_envs, device=device, dtype=torch.bool)
         env._landing_touchdown_just_happened = torch.zeros(num_envs, device=device, dtype=torch.bool)
         env._landing_touchdown_pre_rel_vz = torch.zeros(num_envs, device=device, dtype=torch.float32)
+        env._landing_touchdown_platform_vz = torch.zeros(num_envs, device=device, dtype=torch.float32)
         env._landing_prev_rel_vz = torch.zeros(num_envs, device=device, dtype=torch.float32)
         env._landing_touchdown_force_norm = torch.zeros(num_envs, device=device, dtype=torch.float32)
         env._landing_touchdown_xy_error = torch.zeros(num_envs, device=device, dtype=torch.float32)
@@ -46,6 +47,7 @@ def clear_touchdown_state(env, env_ids: torch.Tensor | None = None) -> None:
         env._landing_touchdown_flag.zero_()
         env._landing_touchdown_just_happened.zero_()
         env._landing_touchdown_pre_rel_vz.zero_()
+        env._landing_touchdown_platform_vz.zero_()
         env._landing_prev_rel_vz.zero_()
         env._landing_touchdown_force_norm.zero_()
         env._landing_touchdown_xy_error.zero_()
@@ -59,6 +61,7 @@ def clear_touchdown_state(env, env_ids: torch.Tensor | None = None) -> None:
     env._landing_touchdown_flag[ids] = False
     env._landing_touchdown_just_happened[ids] = False
     env._landing_touchdown_pre_rel_vz[ids] = 0.0
+    env._landing_touchdown_platform_vz[ids] = 0.0
     env._landing_prev_rel_vz[ids] = 0.0
     env._landing_touchdown_force_norm[ids] = 0.0
     env._landing_touchdown_xy_error[ids] = 0.0
@@ -99,6 +102,7 @@ def update_touchdown_state(
     contact_force_norm = torch.amax(contact_force_norm, dim=(1, 2))
 
     rel_vz = asset.data.root_lin_vel_w[:, 2] - reference_asset.data.root_lin_vel_w[:, 2]
+    platform_vz = reference_asset.data.root_lin_vel_w[:, 2]
     rel_xy = asset.data.root_pos_w[:, :2] - reference_asset.data.root_pos_w[:, :2]
     xy_error = torch.linalg.norm(rel_xy, dim=1)
     roll, pitch, yaw = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
@@ -107,6 +111,7 @@ def update_touchdown_state(
     env._landing_touchdown_just_happened.zero_()
     env._landing_touchdown_just_happened[just_happened] = True
     env._landing_touchdown_pre_rel_vz[just_happened] = env._landing_prev_rel_vz[just_happened]
+    env._landing_touchdown_platform_vz[just_happened] = platform_vz[just_happened]
     env._landing_touchdown_force_norm[:] = contact_force_norm
     env._landing_touchdown_xy_error[just_happened] = xy_error[just_happened]
     env._landing_touchdown_roll[just_happened] = roll[just_happened]
@@ -130,6 +135,11 @@ def touchdown_just_happened(env) -> torch.Tensor:
 def touchdown_pre_rel_vz(env) -> torch.Tensor:
     _ensure_state(env)
     return env._landing_touchdown_pre_rel_vz
+
+
+def touchdown_platform_vz(env) -> torch.Tensor:
+    _ensure_state(env)
+    return env._landing_touchdown_platform_vz
 
 
 def touchdown_xy_error(env) -> torch.Tensor:

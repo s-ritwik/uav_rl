@@ -375,6 +375,7 @@ class MovingPlatform:
         size: tuple[float, float, float] = (1.0, 1.0, 0.2),
         base_position: tuple[float, float, float] = (0.0, 0.0, 0.1),
         add_top_decal: bool = True,
+        top_decal_size_xy: tuple[float, float] | None = None,
     ):
         self.world = world
         self.prim_path = prim_path
@@ -382,6 +383,10 @@ class MovingPlatform:
         self.physics_dt = float(physics_dt)
         self.size = tuple(float(x) for x in size)
         self.base_position = tuple(float(x) for x in base_position)
+        if top_decal_size_xy is None:
+            self.top_decal_size_xy = (self.size[0], self.size[1])
+        else:
+            self.top_decal_size_xy = tuple(float(x) for x in top_decal_size_xy)
         if motion_profile is not None:
             self.profile = motion_profile
         else:
@@ -464,9 +469,10 @@ class MovingPlatform:
             return
 
         stage = self.world.stage
-        # Mirror the Pegasus example: local top face sits at +0.5 on the unit cube.
-        half_x = 0.5
-        half_y = 0.5
+        # The platform prim is scaled, so child mesh local coordinates must be normalized by the
+        # parent cube scale to achieve the requested physical top-decal footprint.
+        half_x = 0.5 * float(self.top_decal_size_xy[0]) / max(float(self.size[0]), 1.0e-9)
+        half_y = 0.5 * float(self.top_decal_size_xy[1]) / max(float(self.size[1]), 1.0e-9)
         top_z = 0.5005
 
         decal_mesh_path = Sdf.Path(f"{self.prim_path}/top_decal")

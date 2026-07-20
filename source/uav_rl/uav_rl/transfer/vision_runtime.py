@@ -24,7 +24,7 @@ class VisionRuntimeConfig:
     image_topic: str = "/rgb"
     raw_pose_topic: str = "/ar_pose/raw"
     filtered_pose_topic: str = "/ar_pose/mekf_filtered"
-    marker_size_m: float = 1.0
+    marker_size_m: float = 0.70
     fractal_config_file: str = "configuration_fractal_m7.yml"
     camparam_config_file: str = "CamParameters_gazebo_720p.yml"
     config_dir: str = ""
@@ -35,13 +35,13 @@ class VisionRuntimeConfig:
     display_scale: float = 0.5
     z_measurement_scale: float = 1.0
     z_measurement_bias: float = 0.0
-    z_innov_threshold: float = 0.12
+    z_innov_threshold: float = 0.25
     enable_z_output_smoother: bool = True
-    z_output_smoother_tau: float = 0.20
+    z_output_smoother_tau: float = 0.30
     reinit_after_rejects: int = 3
     camera_to_uav_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
     headless: bool = False
-    detector_camera_fps: float = 10.0
+    detector_camera_fps: float = 20.0
     detector_video_fps: float = 2.0
     detector_video_queue_max: int = 4
     enable_video_recording: bool = False

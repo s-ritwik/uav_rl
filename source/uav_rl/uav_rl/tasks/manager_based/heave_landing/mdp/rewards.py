@@ -11,6 +11,7 @@ from isaaclab.utils import math as math_utils
 from .landing_state import (
     touchdown_flag,
     touchdown_just_happened,
+    touchdown_platform_vz,
     touchdown_pre_rel_vz,
     touchdown_roll_pitch_yaw,
     touchdown_xy_error,
@@ -216,6 +217,8 @@ def touchdown_quality_reward(
     bad_touchdown_reward: float = -5.0,
     center_proximity_bonus: float = 0.0,
     low_touchdown_speed_bonus: float = 0.0,
+    low_platform_vertical_speed_bonus: float = 0.0,
+    platform_vertical_speed_bonus_scale_mps: float = 0.25,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="body"),
@@ -241,10 +244,12 @@ def touchdown_quality_reward(
 
     just_touched = touchdown_just_happened(env)
     pre_rel_vz = touchdown_pre_rel_vz(env)
+    platform_vz_at_touchdown = touchdown_platform_vz(env)
 
     # Convert relative vertical velocity to a positive descent speed (m/s).
     # In world ENU, downward is negative z velocity.
     descent_speed = (-pre_rel_vz).clamp_min(0.0)
+    platform_vertical_speed = torch.abs(platform_vz_at_touchdown)
 
     pos_rel = _relative_position(env, asset_cfg, reference_asset_cfg)
     xy_error = torch.linalg.norm(pos_rel[:, :2], dim=1)
@@ -279,6 +284,11 @@ def touchdown_quality_reward(
         speed_closeness = (1.0 - descent_speed / speed_radius).clamp(0.0, 1.0)
         # Add an extra touchdown bonus that peaks at zero descent speed.
         good_reward = good_reward + float(low_touchdown_speed_bonus) * speed_closeness
+    if float(low_platform_vertical_speed_bonus) != 0.0:
+        platform_speed_radius = max(float(platform_vertical_speed_bonus_scale_mps), 1.0e-6)
+        platform_speed_closeness = (1.0 - platform_vertical_speed / platform_speed_radius).clamp(0.0, 1.0)
+        # Add an extra touchdown bonus that peaks when the platform vertical speed is zero.
+        good_reward = good_reward + float(low_platform_vertical_speed_bonus) * platform_speed_closeness
 
     reward[just_touched] = torch.where(
         good[just_touched],

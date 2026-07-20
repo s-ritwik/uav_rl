@@ -89,9 +89,9 @@ class HeaveLandingTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.15
+    max_touchdown_speed_mps: float = 0.25
     # XY-center tolerance used only when require_xy_within_box=True.
-    max_xy_error_m: float = 0.15
+    max_xy_error_m: float = 0.20
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
     # If True, good touchdown also requires roll/pitch/yaw to satisfy the attitude limits below.
@@ -112,6 +112,10 @@ class HeaveLandingTouchdownCfg:
     center_proximity_bonus: float = 1000.0
     # Extra shaped bonus on good touchdowns that increases as descent speed approaches zero.
     low_touchdown_speed_bonus: float = 1000.0
+    # Extra shaped bonus on good touchdowns that increases as platform vertical speed approaches zero.
+    low_platform_vertical_speed_bonus: float = 1000.0
+    # Platform vertical-speed scale for the zero-speed touchdown bonus.
+    platform_vertical_speed_bonus_scale_mps: float = 0.25
 
 
 @configclass
@@ -183,8 +187,8 @@ class HeaveLandingActionCommandLimitsCfg:
 class HeaveLandingResetPoseRangeCfg:
     """Robot reset pose ranges used by ``reset_root_state_uniform``."""
 
-    x: tuple[float, float] = (-0.3, 0.3)
-    y: tuple[float, float] = (-0.3, 0.3)
+    x: tuple[float, float] = (-1, 1)
+    y: tuple[float, float] = (-1, 1)
     z: tuple[float, float] = (2.5, 4.0)
     roll: tuple[float, float] = (-0.2, 0.2)
     pitch: tuple[float, float] = (-0.15, 0.15)
@@ -462,6 +466,12 @@ class HeaveLandingPostInitCfg:
         env_cfg.rewards.touchdown_quality.params["center_proximity_bonus"] = float(self.touchdown.center_proximity_bonus)
         env_cfg.rewards.touchdown_quality.params["low_touchdown_speed_bonus"] = float(
             self.touchdown.low_touchdown_speed_bonus
+        )
+        env_cfg.rewards.touchdown_quality.params["low_platform_vertical_speed_bonus"] = float(
+            self.touchdown.low_platform_vertical_speed_bonus
+        )
+        env_cfg.rewards.touchdown_quality.params["platform_vertical_speed_bonus_scale_mps"] = float(
+            self.touchdown.platform_vertical_speed_bonus_scale_mps
         )
         env_cfg.terminations.touchdown.params["threshold"] = float(self.touchdown.force_threshold_n)
         env_cfg.curriculum.touchdown_quality_metrics.params["max_touchdown_speed_mps"] = float(
