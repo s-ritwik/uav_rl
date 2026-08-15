@@ -136,7 +136,7 @@ def _bootstrap_isaac_ros2_python():
     ros_distro = os.environ.setdefault("ROS_DISTRO", "humble")
     os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
 
-    isaac_root = Path("/home/rycker/isaacsim").resolve()
+    isaac_root = Path(os.environ.get("ISAAC_SIM_PKG", Path.home() / "isaacsim")).expanduser().resolve()
     ros_bridge_root = isaac_root / "exts" / "isaacsim.ros2.bridge" / ros_distro
     ros_python_root = ros_bridge_root / "rclpy"
     ros_lib_root = ros_bridge_root / "lib"

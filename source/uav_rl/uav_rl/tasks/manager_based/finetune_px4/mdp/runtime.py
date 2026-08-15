@@ -23,7 +23,9 @@ q_ENU_to_NED = np.array([0.70711, 0.70711, 0.0, 0.0])
 rot_ENU_to_NED = Rotation.from_quat(q_ENU_to_NED)
 q_FLU_to_FRD = np.array([1.0, 0.0, 0.0, 0.0])
 rot_FLU_to_FRD = Rotation.from_quat(q_FLU_to_FRD)
-PEGASUS_EXTENSION_ROOT = Path("/home/rycker/src/PegasusSimulator/extensions/pegasus.simulator")
+PEGASUS_EXTENSION_ROOT = Path(
+    os.environ.get("PEGASUS_EXT_PATH", Path.home() / "src/PegasusSimulator/extensions/pegasus.simulator")
+).expanduser()
 PEGASUS_LOGIC_ROOT = PEGASUS_EXTENSION_ROOT / "pegasus" / "simulator" / "logic"
 PEGASUS_CONFIG_PATH = PEGASUS_EXTENSION_ROOT / "config" / "configs.yaml"
 
@@ -74,7 +76,7 @@ def _bootstrap_px4_backend_modules():
 
         class PegasusInterface:  # type: ignore[no-redef]
             def __init__(self):
-                self._px4_path = str(Path(config.get("px4_dir", "~/src/PX4-Autopilot")).expanduser())
+                self._px4_path = str(Path(config.get("px4_dir", Path.home() / "src/PX4-Autopilot")).expanduser())
                 self._px4_default_airframe = str(config.get("px4_default_airframe", "gazebo-classic_iris"))
                 global_coordinates = config.get("global_coordinates", {})
                 self._latitude = float(global_coordinates.get("latitude", 38.736832))
@@ -738,7 +740,9 @@ class PX4FineTuneRuntimeState:
 
     def _resolve_px4_launch_defaults(self) -> tuple[str, str]:
         config = _read_pegasus_config()
-        px4_dir = self.cfg.launch.px4_dir or str(Path(config.get("px4_dir", "~/src/PX4-Autopilot")).expanduser())
+        px4_dir = self.cfg.launch.px4_dir or str(
+            Path(config.get("px4_dir", Path.home() / "src/PX4-Autopilot")).expanduser()
+        )
         vehicle_model = self.cfg.launch.vehicle_model or str(config.get("px4_default_airframe", "gazebo-classic_iris"))
         return px4_dir, vehicle_model
 

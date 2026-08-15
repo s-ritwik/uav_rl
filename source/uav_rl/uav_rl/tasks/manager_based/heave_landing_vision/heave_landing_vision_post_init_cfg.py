@@ -346,9 +346,10 @@ class HeaveLandingVisionObservationCfg:
     camera_height_px: int = 360
     detector_fps: float = 20.0
     marker_size_m: float = 0.70
-    fractal_config_path: str = (
-        "/home/rycker/projects/ros2_ws/src/precision_landing_using_vision/"
-        "precision_landing_using_vision/config/configuration_fractal_m7.yml"
+    fractal_config_path: str = str(
+        Path.home()
+        / "projects/ros2_ws/src/precision_landing_using_vision/precision_landing_using_vision/"
+        "config/configuration_fractal_m7.yml"
     )
     marker_timeout_s: float = 0.30
     position_only_filter: bool = True
