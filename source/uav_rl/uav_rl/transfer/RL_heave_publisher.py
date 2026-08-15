@@ -26,9 +26,9 @@ DEFAULT_TOPIC_SUFFIXES = {
     "disarm_cmd": "/policy_cmd/disarm",
 }
 
-DEFAULT_POLICY_JIT = (
-    "/home/rycker/src/uav_rl/logs/rsl_rl/heave_landing_gru/"
-    "2026-05-19_00-14-23_heave_gru_3.0.1/exported/policy.pt"
+DEFAULT_POLICY_JIT = str(
+    Path(__file__).resolve().parents[4]
+    / "logs/rsl_rl/heave_landing_gru/2026-05-19_00-14-23_heave_gru_3.0.1/exported/policy.pt"
 )
 
 

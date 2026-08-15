@@ -20,6 +20,9 @@ rot_ENU_to_NED = Rotation.from_quat(q_ENU_to_NED)
 q_FLU_to_FRD = np.array([1.0, 0.0, 0.0, 0.0])
 rot_FLU_to_FRD = Rotation.from_quat(q_FLU_to_FRD)
 GRAVITY_VECTOR = np.array([0.0, 0.0, -9.80665])
+PEGASUS_EXTENSION_ROOT = Path(
+    os.environ.get("PEGASUS_EXT_PATH", Path.home() / "src/PegasusSimulator/extensions/pegasus.simulator")
+).expanduser()
 
 FAST_START_PARAM_TEXT = "\n".join(
     [
@@ -32,9 +35,7 @@ FAST_START_PARAM_TEXT = "\n".join(
 
 
 def _load_ardupilot_plugin_class():
-    plugin_path = (
-        Path("/home/rycker/src/PegasusSimulator/extensions/pegasus.simulator/pegasus/simulator/logic/backends/tools/ArduPilotPlugin.py")
-    )
+    plugin_path = PEGASUS_EXTENSION_ROOT / "pegasus/simulator/logic/backends/tools/ArduPilotPlugin.py"
     spec = importlib.util.spec_from_file_location("uav_rl_ardupilot_plugin", plugin_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Unable to load ArduPilotPlugin from {plugin_path}")
@@ -47,9 +48,7 @@ ArduPilotPlugin = _load_ardupilot_plugin_class()
 
 
 def _load_ardupilot_launch_tool_class():
-    launch_tool_path = Path(
-        "/home/rycker/src/PegasusSimulator/extensions/pegasus.simulator/pegasus/simulator/logic/backends/tools/ardupilot_launch_tool.py"
-    )
+    launch_tool_path = PEGASUS_EXTENSION_ROOT / "pegasus/simulator/logic/backends/tools/ardupilot_launch_tool.py"
     spec = importlib.util.spec_from_file_location("uav_rl_ardupilot_launch_tool", launch_tool_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Unable to load ArduPilotLaunchTool from {launch_tool_path}")
@@ -460,7 +459,7 @@ class MultiOutArduPilotLaunchTool(ArduPilotLaunchTool):
 
 @configclass
 class ArduPilotLaunchCfg:
-    ardupilot_dir: str = "/home/rycker/projects/ardupilot"
+    ardupilot_dir: str = str(Path.home() / "projects/ardupilot")
     vehicle_model: str = "gazebo-iris"
     bridge_baseport: int = 14650
     fast_start: bool = True

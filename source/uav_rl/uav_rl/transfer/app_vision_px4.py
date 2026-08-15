@@ -157,7 +157,10 @@ parser.add_argument(
 parser.add_argument(
     "--vision_config_dir",
     type=str,
-    default="/home/rycker/projects/ros2_ws/src/precision_landing_using_vision/precision_landing_using_vision/config",
+    default=str(
+        Path.home()
+        / "projects/ros2_ws/src/precision_landing_using_vision/precision_landing_using_vision/config"
+    ),
     help="Directory containing the fractal and camera intrinsics YAML files.",
 )
 parser.add_argument(
@@ -175,7 +178,7 @@ parser.add_argument(
 parser.add_argument(
     "--vision_workspace_setup",
     type=str,
-    default="/home/rycker/projects/ros2_ws/install/setup.bash",
+    default=str(Path.home() / "projects/ros2_ws/install/setup.bash"),
     help="ROS 2 workspace setup script that provides the precision_landing_using_vision package.",
 )
 parser.add_argument(
@@ -306,7 +309,7 @@ def _bootstrap_isaac_ros2_python():
     ros_distro = os.environ.setdefault("ROS_DISTRO", "humble")
     os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
 
-    isaac_root = Path("/home/rycker/isaacsim").resolve()
+    isaac_root = Path(os.environ.get("ISAAC_SIM_PKG", Path.home() / "isaacsim")).expanduser().resolve()
     ros_bridge_root = isaac_root / "exts" / "isaacsim.ros2.bridge" / ros_distro
     ros_python_root = ros_bridge_root / "rclpy"
     ros_lib_root = ros_bridge_root / "lib"

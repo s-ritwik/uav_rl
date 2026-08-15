@@ -35,7 +35,9 @@ class LandingSwaySceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = IRIS_CFG.replace(
         prim_path="{ENV_REGEX_NS}/Robot",
-        spawn=IRIS_CFG.spawn.replace(usd_path="/home/rycker/src/uav_rl/source/uav_rl/uav_rl/assets/robots/iris/iris_legs.usd"),
+        spawn=IRIS_CFG.spawn.replace(
+            usd_path=str(Path(__file__).resolve().parents[3] / "assets/robots/iris/iris_legs.usd")
+        ),
     )
 
     # Track contact forces on robot bodies for contact-based termination.
