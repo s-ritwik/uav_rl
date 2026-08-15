@@ -1,0 +1,482 @@
+from __future__ import annotations
+
+from dataclasses import MISSING
+from typing import Sequence
+
+import torch
+
+from isaaclab.assets import Articulation
+from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
+from isaaclab.utils.buffers import DelayBuffer
+from isaaclab.utils import configclass
+from isaaclab.utils.math import quat_apply_inverse
+
+from ..controllers import PX4LikeVelocityController, RotorAllocator, RotorMotorModel, quat_wxyz_to_xyzw
+from .landing_state import clear_touchdown_state, touchdown_flag
+from .randomization import apply_controller_state_estimation_noise, get_domain_randomization_state
+
+
+@configclass
+class HeaveLandingVelocityActionCfg(ActionTermCfg):
+    """Action term config for policy actions [vx, vy, vz, yaw_rate]."""
+
+    class_type: type[ActionTerm] = MISSING
+
+    body_name: str = "body"
+    rotor_names: tuple[str, str, str, str] = ("rotor0", "rotor1", "rotor2", "rotor3")
+    rotor_joint_names: tuple[str, str, str, str] = ("joint0", "joint1", "joint2", "joint3")
+    propeller_visual_enabled: bool = True
+    propeller_visual_idle_force_threshold: float = 0.1
+    propeller_visual_idle_speed: float = 5.0
+    propeller_visual_active_speed: float = 100.0
+
+    action_scale: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
+    action_offset: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    velocity_limits: tuple[float, float, float] = (3.0, 3.0, 2.0)
+    velocity_lower_limits: tuple[float, float, float] | None = None
+    velocity_upper_limits: tuple[float, float, float] | None = None
+    yaw_rate_limit: float = 2.5
+    yaw_rate_lower_limit: float | None = None
+    yaw_rate_upper_limit: float | None = None
+
+    # Controller parameters (Pegasus example 12 defaults).
+    mass: float = 1.5
+    gravity: float = 9.81
+    max_tilt_deg: float = 50.0
+    thrust_limits: tuple[float, float] = (0.0, 35.0)
+
+    velocity_p_gains: tuple[float, float, float] = (1.8, 1.8, 4.0)
+    velocity_i_gains: tuple[float, float, float] = (0.4, 0.4, 2)
+    velocity_d_gains: tuple[float, float, float] = (0.2, 0.2, 0.0)
+    velocity_integrator_limits: tuple[float, float, float] = (2.0, 2.0, 2.0)
+    velocity_accel_limits: tuple[float, float, float] = (8.0, 6.0, 6.0)
+
+    attitude_p_gains: tuple[float, float, float] = (6.0, 6.0, 3.0)
+    rate_p_gains: tuple[float, float, float] = (0.20, 0.20, 0.10)
+    rate_i_gains: tuple[float, float, float] = (0.10, 0.10, 0.08)
+    rate_d_gains: tuple[float, float, float] = (0.004, 0.004, 0.002)
+    rate_limits: tuple[float, float, float] = (3.5, 3.5, 2.5)
+    rate_integrator_limits: tuple[float, float, float] = (1.0, 1.0, 0.8)
+    torque_limits: tuple[float, float, float] = (0.6, 0.6, 0.25)
+
+    # Pegasus-style motor + mapper defaults.
+    rotor_constant: tuple[float, float, float, float] = (8.54858e-6, 8.54858e-6, 8.54858e-6, 8.54858e-6)
+    rolling_moment_coefficient: tuple[float, float, float, float] = (1.0e-6, 1.0e-6, 1.0e-6, 1.0e-6)
+    rot_dir: tuple[float, float, float, float] = (-1.0, -1.0, 1.0, 1.0)
+    min_rotor_velocity: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    max_rotor_velocity: tuple[float, float, float, float] = (1100.0, 1100.0, 1100.0, 1100.0)
+    drag_coefficients: tuple[float, float, float] = (0.50, 0.30, 0.0)
+
+    input_offset: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    input_scaling: tuple[float, float, float, float] = (1000.0, 1000.0, 1000.0, 1000.0)
+    zero_position_armed: tuple[float, float, float, float] = (100.0, 100.0, 100.0, 100.0)
+    control_range: tuple[float, float] = (0.0, 1.0)
+
+    fallback_arm_length: float = 0.17
+    cut_lift_after_touchdown: bool = True
+
+
+class HeaveLandingVelocityAction(ActionTerm):
+    """
+    Manager action term that mirrors Pegasus example 12 architecture.
+
+    Tick semantics are preserved:
+    - apply cached motor command this physics tick,
+    - compute next motor command from latest state for the next tick.
+    """
+
+    cfg: HeaveLandingVelocityActionCfg
+    _asset: Articulation
+
+    def __init__(self, cfg: HeaveLandingVelocityActionCfg, env):
+        super().__init__(cfg, env)
+
+        body_ids, body_names = self._asset.find_bodies(self.cfg.body_name, preserve_order=True)
+        if len(body_ids) != 1:
+            raise ValueError(f"Expected exactly one body matching '{self.cfg.body_name}', got {body_names}")
+        self._body_id = body_ids[0]
+        self._body_name = body_names[0]
+
+        rotor_ids, rotor_names = self._asset.find_bodies(list(self.cfg.rotor_names), preserve_order=True)
+        if len(rotor_ids) != 4:
+            raise ValueError(
+                f"Expected exactly 4 rotor bodies matching {self.cfg.rotor_names}, got {rotor_names}"
+            )
+        self._rotor_ids = rotor_ids
+        self._rotor_names = rotor_names
+        self._wrench_body_ids = self._rotor_ids + [self._body_id]
+        self._propeller_visual_enabled = bool(self.cfg.propeller_visual_enabled)
+        self._propeller_visual_warned = False
+        self._rotor_joint_ids: list[int] = []
+        self._rotor_joint_names: list[str] = []
+
+        self._raw_actions = torch.zeros((self.num_envs, self.action_dim), device=self.device)
+        self._processed_actions = torch.zeros_like(self._raw_actions)
+        self._velocity_sp = torch.zeros((self.num_envs, 3), device=self.device)
+        self._yaw_rate_sp = torch.zeros((self.num_envs,), device=self.device)
+
+        self._action_scale = torch.tensor(self.cfg.action_scale, device=self.device).unsqueeze(0)
+        self._action_offset = torch.tensor(self.cfg.action_offset, device=self.device).unsqueeze(0)
+        self._velocity_lower_limits = torch.tensor(
+            self.cfg.velocity_lower_limits if self.cfg.velocity_lower_limits is not None else tuple(-v for v in self.cfg.velocity_limits),
+            device=self.device,
+        )
+        self._velocity_upper_limits = torch.tensor(
+            self.cfg.velocity_upper_limits if self.cfg.velocity_upper_limits is not None else self.cfg.velocity_limits,
+            device=self.device,
+        )
+        self._yaw_rate_lower_limit = float(
+            self.cfg.yaw_rate_lower_limit if self.cfg.yaw_rate_lower_limit is not None else -self.cfg.yaw_rate_limit
+        )
+        self._yaw_rate_upper_limit = float(
+            self.cfg.yaw_rate_upper_limit if self.cfg.yaw_rate_upper_limit is not None else self.cfg.yaw_rate_limit
+        )
+        self._rotor_direction = torch.tensor(self.cfg.rot_dir, device=self.device, dtype=self._raw_actions.dtype).unsqueeze(0)
+        self._rotor_visual_joint_vel = torch.zeros((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
+        self._thrust_asymmetry_scale = torch.ones((self.num_envs, 4), device=self.device, dtype=self._raw_actions.dtype)
+        self._motor_lag_alpha = torch.ones((self.num_envs, 1), device=self.device, dtype=self._raw_actions.dtype)
+
+        domain_rand_cfg = getattr(env.cfg, "domain_randomization", None)
+        max_action_delay = 0
+        if domain_rand_cfg is not None:
+            max_action_delay = int(domain_rand_cfg.action_delay_steps_range[1])
+        self._action_delay_buffer = DelayBuffer(max_action_delay, self.num_envs, self.device)
+
+        self._nominal_velocity_p_gains = torch.tensor(
+            self.cfg.velocity_p_gains, device=self.device, dtype=self._raw_actions.dtype
+        ).repeat(self.num_envs, 1)
+        self._nominal_velocity_i_gains = torch.tensor(
+            self.cfg.velocity_i_gains, device=self.device, dtype=self._raw_actions.dtype
+        ).repeat(self.num_envs, 1)
+        self._nominal_velocity_d_gains = torch.tensor(
+            self.cfg.velocity_d_gains, device=self.device, dtype=self._raw_actions.dtype
+        ).repeat(self.num_envs, 1)
+
+        self._controller = PX4LikeVelocityController(
+            num_envs=self.num_envs,
+            device=self.device,
+            dtype=self._raw_actions.dtype,
+            mass=self.cfg.mass,
+            gravity=self.cfg.gravity,
+            max_tilt_deg=self.cfg.max_tilt_deg,
+            thrust_limits=self.cfg.thrust_limits,
+            velocity_p_gains=self.cfg.velocity_p_gains,
+            velocity_i_gains=self.cfg.velocity_i_gains,
+            velocity_d_gains=self.cfg.velocity_d_gains,
+            velocity_integrator_limits=self.cfg.velocity_integrator_limits,
+            velocity_accel_limits=self.cfg.velocity_accel_limits,
+            attitude_p_gains=self.cfg.attitude_p_gains,
+            rate_p_gains=self.cfg.rate_p_gains,
+            rate_i_gains=self.cfg.rate_i_gains,
+            rate_d_gains=self.cfg.rate_d_gains,
+            rate_limits=self.cfg.rate_limits,
+            rate_integrator_limits=self.cfg.rate_integrator_limits,
+            torque_limits=self.cfg.torque_limits,
+            input_offset=self.cfg.input_offset,
+            input_scaling=self.cfg.input_scaling,
+            zero_position_armed=self.cfg.zero_position_armed,
+            control_range=self.cfg.control_range,
+        )
+
+        self._motor_model = RotorMotorModel(
+            rotor_constant=self.cfg.rotor_constant,
+            rolling_moment_coefficient=self.cfg.rolling_moment_coefficient,
+            rot_dir=self.cfg.rot_dir,
+            drag_coefficients=self.cfg.drag_coefficients,
+            device=self.device,
+            dtype=self._raw_actions.dtype,
+        )
+
+        self._allocator: RotorAllocator | None = None
+
+        self._cached_motor_omega = torch.zeros((self.num_envs, 4), device=self.device)
+        self._last_hil_controls = torch.zeros((self.num_envs, 4), device=self.device)
+        self._last_torque_sp = torch.zeros((self.num_envs, 3), device=self.device)
+        self._last_thrust_sp = torch.zeros((self.num_envs,), device=self.device)
+
+        self._forces = torch.zeros((self.num_envs, 5, 3), device=self.device)
+        self._torques = torch.zeros((self.num_envs, 5, 3), device=self.device)
+
+        self._controller._cascade.velocity_controller.p_gains = self._nominal_velocity_p_gains.clone()
+        self._controller._cascade.velocity_controller.i_gains = self._nominal_velocity_i_gains.clone()
+        self._controller._cascade.velocity_controller.d_gains = self._nominal_velocity_d_gains.clone()
+
+    @property
+    def action_dim(self) -> int:
+        return 4
+
+    @property
+    def raw_actions(self) -> torch.Tensor:
+        return self._raw_actions
+
+    @property
+    def processed_actions(self) -> torch.Tensor:
+        return self._processed_actions
+
+    @property
+    def last_hil_controls(self) -> torch.Tensor:
+        return self._last_hil_controls
+
+    @property
+    def last_motor_omega(self) -> torch.Tensor:
+        return self._cached_motor_omega
+
+    @property
+    def last_torque_sp(self) -> torch.Tensor:
+        return self._last_torque_sp
+
+    @property
+    def last_thrust_sp(self) -> torch.Tensor:
+        return self._last_thrust_sp
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        delayed_actions = self._action_delay_buffer.compute(actions)
+
+        processed = delayed_actions * self._action_scale + self._action_offset
+        processed[:, :3] = torch.clamp(
+            processed[:, :3], min=self._velocity_lower_limits, max=self._velocity_upper_limits
+        )
+        processed[:, 3] = torch.clamp(processed[:, 3], min=self._yaw_rate_lower_limit, max=self._yaw_rate_upper_limit)
+
+        self._processed_actions[:] = processed
+        self._velocity_sp[:] = processed[:, :3]
+        self._yaw_rate_sp[:] = processed[:, 3]
+
+    def _maybe_initialize_propeller_visual(self):
+        if not self._propeller_visual_enabled or len(self._rotor_joint_ids) == 4:
+            return
+
+        try:
+            joint_ids, joint_names = self._asset.find_joints(list(self.cfg.rotor_joint_names), preserve_order=True)
+            if len(joint_ids) != 4:
+                raise ValueError(f"Expected 4 rotor joints, got {joint_names}")
+            self._rotor_joint_ids = joint_ids
+            self._rotor_joint_names = joint_names
+        except Exception as exc:
+            if not self._propeller_visual_warned:
+                print(
+                    "[WARN][PX4LikeVelocityAction] Could not enable propeller visual spin "
+                    f"for joints {self.cfg.rotor_joint_names}: {exc}"
+                )
+                self._propeller_visual_warned = True
+            self._propeller_visual_enabled = False
+
+    def _handle_propeller_visual(self, rotor_forces: torch.Tensor):
+        """Mirror Pegasus Multirotor.handle_propeller_visual for rotor joint animation."""
+        if not self._propeller_visual_enabled:
+            return
+
+        self._maybe_initialize_propeller_visual()
+        if not self._propeller_visual_enabled:
+            return
+
+        armed_mask = rotor_forces > 0.0
+        active_mask = rotor_forces >= float(self.cfg.propeller_visual_idle_force_threshold)
+        idle_mask = armed_mask & (~active_mask)
+
+        self._rotor_visual_joint_vel.zero_()
+        self._rotor_visual_joint_vel[idle_mask] = float(self.cfg.propeller_visual_idle_speed)
+        self._rotor_visual_joint_vel[active_mask] = float(self.cfg.propeller_visual_active_speed)
+        self._rotor_visual_joint_vel *= self._rotor_direction
+
+        # Directly write dof velocities so visuals follow the currently applied thrust command.
+        self._asset.write_joint_velocity_to_sim(self._rotor_visual_joint_vel, joint_ids=self._rotor_joint_ids)
+
+    def _fallback_rotor_positions(self) -> torch.Tensor:
+        l = float(self.cfg.fallback_arm_length)
+        return torch.tensor(
+            [
+                [l, l, 0.0],
+                [-l, l, 0.0],
+                [-l, -l, 0.0],
+                [l, -l, 0.0],
+            ],
+            device=self.device,
+            dtype=self._raw_actions.dtype,
+        )
+
+    def _maybe_initialize_allocator(self):
+        if self._allocator is not None:
+            return
+
+        body_pos_w = self._asset.data.body_pos_w[:, self._body_id]
+        body_quat_w = self._asset.data.body_quat_w[:, self._body_id]
+        rotor_pos_w = self._asset.data.body_pos_w[:, self._rotor_ids]
+
+        rel_w = rotor_pos_w - body_pos_w.unsqueeze(1)
+        rel_w_flat = rel_w.reshape(-1, 3)
+        quat_flat = body_quat_w.unsqueeze(1).repeat(1, 4, 1).reshape(-1, 4)
+        rel_b = quat_apply_inverse(quat_flat, rel_w_flat).reshape(self.num_envs, 4, 3)
+
+        rotor_positions_b = rel_b[0].detach().clone()
+        if torch.linalg.norm(rotor_positions_b[:, :2], dim=-1).min().item() < 1.0e-6:
+            rotor_positions_b = self._fallback_rotor_positions()
+
+        self._allocator = RotorAllocator(
+            rotor_positions_b=rotor_positions_b,
+            rotor_constant=self.cfg.rotor_constant,
+            rolling_moment_coefficient=self.cfg.rolling_moment_coefficient,
+            rot_dir=self.cfg.rot_dir,
+            max_rotor_velocity=self.cfg.max_rotor_velocity,
+            device=self.device,
+            dtype=self._raw_actions.dtype,
+        )
+
+    def _apply_cached_wrench(self):
+        if bool(self.cfg.cut_lift_after_touchdown):
+            landed = touchdown_flag(self._env)
+            if torch.any(landed):
+                self._cached_motor_omega[landed] = 0.0
+        rotor_forces, rolling_moment = self._motor_model.omega_to_forces(self._cached_motor_omega)
+        rotor_forces = rotor_forces * self._thrust_asymmetry_scale
+        drag_force = self._motor_model.body_drag(self._asset.data.root_lin_vel_b)
+
+        self._forces.zero_()
+        self._torques.zero_()
+
+        self._forces[:, :4, 2] = rotor_forces
+        self._forces[:, 4, :] = drag_force
+        self._torques[:, 4, 2] = rolling_moment
+
+        self._asset.permanent_wrench_composer.set_forces_and_torques(
+            body_ids=self._wrench_body_ids,
+            forces=self._forces,
+            torques=self._torques,
+        )
+
+        self._handle_propeller_visual(rotor_forces)
+
+    def _compute_next_command(self):
+        self._maybe_initialize_allocator()
+
+        attitude_wxyz = self._asset.data.root_quat_w
+        body_rates = self._asset.data.root_ang_vel_b
+        velocity_w = self._asset.data.root_lin_vel_w
+        attitude_wxyz, body_rates, velocity_w = apply_controller_state_estimation_noise(
+            self._env, attitude_wxyz, body_rates, velocity_w
+        )
+        attitude_xyzw = quat_wxyz_to_xyzw(attitude_wxyz)
+
+        outputs = self._controller.step_velocity_mode(
+            attitude_xyzw=attitude_xyzw,
+            body_rates=body_rates,
+            velocity_w=velocity_w,
+            velocity_sp=self._velocity_sp,
+            yaw_rate_sp=self._yaw_rate_sp,
+            dt=float(self._env.physics_dt),
+            accel_ff=None,
+        )
+
+        self._last_torque_sp = outputs["torque_sp"]
+        self._last_thrust_sp = outputs["thrust_sp"]
+
+        desired_motor_omega = self._allocator.force_torque_to_omega(outputs["thrust_sp"], outputs["torque_sp"])
+        if bool(self.cfg.cut_lift_after_touchdown):
+            landed = touchdown_flag(self._env)
+            if torch.any(landed):
+                desired_motor_omega[landed] = 0.0
+        self._cached_motor_omega = self._cached_motor_omega + self._motor_lag_alpha * (
+            desired_motor_omega - self._cached_motor_omega
+        )
+        self._last_hil_controls = self._controller.hil_mapper.motor_omega_to_hil_controls(self._cached_motor_omega)
+
+    def apply_actions(self):
+        # 1) Apply command computed on previous physics tick.
+        self._apply_cached_wrench()
+        # 2) Compute command for the next physics tick.
+        self._compute_next_command()
+
+    def reset(self, env_ids: Sequence[int] | None = None):
+        if env_ids is None:
+            clear_touchdown_state(self._env)
+            self._raw_actions.zero_()
+            self._processed_actions.zero_()
+            self._velocity_sp.zero_()
+            self._yaw_rate_sp.zero_()
+            self._cached_motor_omega.zero_()
+            self._last_hil_controls.zero_()
+            self._last_torque_sp.zero_()
+            self._last_thrust_sp.zero_()
+            self._controller.reset(None)
+            self._action_delay_buffer.set_time_lag(0)
+            self._action_delay_buffer.reset()
+            self._sync_domain_randomization(None)
+            if self._propeller_visual_enabled and len(self._rotor_joint_ids) == 4:
+                self._rotor_visual_joint_vel.zero_()
+                self._asset.write_joint_velocity_to_sim(self._rotor_visual_joint_vel, joint_ids=self._rotor_joint_ids)
+            return
+
+        if isinstance(env_ids, torch.Tensor):
+            ids = env_ids.to(device=self.device, dtype=torch.long)
+        else:
+            ids = torch.tensor(list(env_ids), device=self.device, dtype=torch.long)
+
+        clear_touchdown_state(self._env, ids)
+        self._raw_actions[ids] = 0.0
+        self._processed_actions[ids] = 0.0
+        self._velocity_sp[ids] = 0.0
+        self._yaw_rate_sp[ids] = 0.0
+        self._cached_motor_omega[ids] = 0.0
+        self._last_hil_controls[ids] = 0.0
+        self._last_torque_sp[ids] = 0.0
+        self._last_thrust_sp[ids] = 0.0
+        self._controller.reset(ids)
+        self._action_delay_buffer.reset(ids)
+        self._sync_domain_randomization(ids)
+        if self._propeller_visual_enabled and len(self._rotor_joint_ids) == 4:
+            self._rotor_visual_joint_vel[ids] = 0.0
+            self._asset.write_joint_velocity_to_sim(
+                self._rotor_visual_joint_vel[ids],
+                joint_ids=self._rotor_joint_ids,
+                env_ids=ids,
+            )
+
+    def _sync_domain_randomization(self, env_ids: torch.Tensor | None):
+        state = get_domain_randomization_state(self._env)
+        if env_ids is None:
+            ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        else:
+            ids = env_ids.to(device=self.device, dtype=torch.long)
+
+        if state is None or not state.cfg.enabled:
+            self._action_delay_buffer.set_time_lag(0, ids)
+            self._thrust_asymmetry_scale[ids] = 1.0
+            self._motor_lag_alpha[ids] = 1.0
+            self._controller._cascade.velocity_controller.p_gains[ids] = self._nominal_velocity_p_gains[ids]
+            self._controller._cascade.velocity_controller.i_gains[ids] = self._nominal_velocity_i_gains[ids]
+            self._controller._cascade.velocity_controller.d_gains[ids] = self._nominal_velocity_d_gains[ids]
+            return
+
+        self._action_delay_buffer.set_time_lag(state.action_delay_steps[ids], ids)
+        self._thrust_asymmetry_scale[ids] = state.thrust_asymmetry_scale[ids].to(
+            device=self.device, dtype=self._raw_actions.dtype
+        )
+
+        tau_s = state.motor_lag_tau_s[ids].to(device=self.device, dtype=self._raw_actions.dtype).unsqueeze(-1)
+        alpha = torch.ones_like(tau_s)
+        active_mask = state.motor_lag_active[ids].unsqueeze(-1)
+        dt = float(self._env.physics_dt)
+        alpha[active_mask] = dt / torch.clamp(tau_s[active_mask] + dt, min=1.0e-6)
+        self._motor_lag_alpha[ids] = torch.clamp(alpha, min=0.0, max=1.0)
+
+        self._controller._cascade.velocity_controller.p_gains[ids] = torch.clamp(
+            self._nominal_velocity_p_gains[ids]
+            + state.velocity_p_gain_delta[ids].to(device=self.device, dtype=self._raw_actions.dtype),
+            min=0.0,
+        )
+        self._controller._cascade.velocity_controller.i_gains[ids] = torch.clamp(
+            self._nominal_velocity_i_gains[ids]
+            + state.velocity_i_gain_delta[ids].to(device=self.device, dtype=self._raw_actions.dtype),
+            min=0.0,
+        )
+        self._controller._cascade.velocity_controller.d_gains[ids] = torch.clamp(
+            self._nominal_velocity_d_gains[ids]
+            + state.velocity_d_gain_delta[ids].to(device=self.device, dtype=self._raw_actions.dtype),
+            min=0.0,
+        )
+
+
+HeaveLandingVelocityActionCfg.class_type = HeaveLandingVelocityAction
+PX4LikeVelocityActionCfg = HeaveLandingVelocityActionCfg
+PX4LikeVelocityAction = HeaveLandingVelocityAction

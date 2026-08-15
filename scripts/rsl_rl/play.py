@@ -78,8 +78,8 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
-# always enable cameras to record video
-if args_cli.video:
+# always enable cameras to record video and camera-driven vision tasks
+if args_cli.video or ("vision" in (args_cli.task or "").lower()):
     args_cli.enable_cameras = True
 
 # clear out sys.argv for Hydra

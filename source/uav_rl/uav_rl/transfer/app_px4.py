@@ -12,6 +12,7 @@ import math
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -122,6 +123,39 @@ args_cli, _ = parser.parse_known_args()
 if args_cli.num_drones < 1:
     parser.error("--num_drones must be greater than or equal to 1.")
 
+
+def _bootstrap_isaac_ros2_python():
+    """Prefer Isaac Sim's bundled ROS 2 Python packages over the system ROS install.
+
+    Isaac Sim runs on Python 3.11 while Ubuntu 22.04 ROS Humble packages are built for
+    Python 3.10. If system ROS paths appear first in sys.path, importing rclpy fails with
+    a missing `_rclpy_pybind11` extension. The ROS bridge ships a matching Python 3.11
+    bundle under the extension tree, so make that path win before any ROS package import.
+    """
+
+    ros_distro = os.environ.setdefault("ROS_DISTRO", "humble")
+    os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+
+    isaac_root = Path("/home/rycker/isaacsim").resolve()
+    ros_bridge_root = isaac_root / "exts" / "isaacsim.ros2.bridge" / ros_distro
+    ros_python_root = ros_bridge_root / "rclpy"
+    ros_lib_root = ros_bridge_root / "lib"
+
+    if ros_python_root.is_dir():
+        sys.path[:] = [p for p in sys.path if "/opt/ros/" not in p]
+        if str(ros_python_root) not in sys.path:
+            sys.path.insert(0, str(ros_python_root))
+
+    if ros_lib_root.is_dir():
+        ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+        paths = [p for p in ld_library_path.split(":") if p]
+        if str(ros_lib_root) not in paths:
+            paths.append(str(ros_lib_root))
+            os.environ["LD_LIBRARY_PATH"] = ":".join(paths)
+
+
+_bootstrap_isaac_ros2_python()
+
 IRIS_USD_PATH = str((Path(__file__).resolve().parents[1] / "assets" / "robots" / "iris" / "iris_legs.usd").resolve())
 PLATFORM_SIZE = (1.0, 1.0, 0.2)
 PLATFORM_ARUCO_TEXTURE_PATH = (
@@ -138,7 +172,7 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
     px4_binary = str((Path(px4_dir).expanduser() / "build" / "px4_sitl_default" / "bin" / "px4").resolve())
     try:
         result = subprocess.run(
-            ["ps", "-eo", "pid=", "args="],
+            ["ps", "-eo", "pid=,pgid=,args="],
             check=False,
             capture_output=True,
             text=True,
@@ -146,21 +180,45 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
     except Exception:
         return
 
-    matching_pids: list[int] = []
+    matching_pids: set[int] = set()
+    matching_pgids: set[int] = set()
     instance_token = f" -i {int(vehicle_id)} "
+    mavlink_token = f"px4-simulator_mavlink --instance {int(vehicle_id)} "
+    rcs_token = f"/init.d-posix/rcS {int(vehicle_id)}"
+    own_pgid = os.getpgid(0)
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
-        if not line or px4_binary not in line or instance_token not in f" {line} ":
+        if not line:
             continue
         try:
-            pid_text, _ = line.split(" ", 1)
+            pid_text, pgid_text, args_text = line.split(None, 2)
             pid = int(pid_text)
+            pgid = int(pgid_text)
         except ValueError:
             continue
-        if pid != os.getpid():
-            matching_pids.append(pid)
+        if pid == os.getpid():
+            continue
 
-    for pid in matching_pids:
+        padded_args = f" {args_text} "
+        is_px4_main = px4_binary in args_text and instance_token in padded_args
+        is_px4_mavlink = mavlink_token in args_text
+        is_px4_rcs_shell = rcs_token in args_text
+        if not (is_px4_main or is_px4_mavlink or is_px4_rcs_shell):
+            continue
+
+        matching_pids.add(pid)
+        if pgid > 0 and pgid != own_pgid:
+            matching_pgids.add(pgid)
+
+    for pgid in sorted(matching_pgids):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+
+    for pid in sorted(matching_pids):
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -168,7 +226,7 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
         except Exception:
             continue
 
-    if matching_pids:
+    if matching_pids or matching_pgids:
         time.sleep(0.5)
 
 simulation_app = SimulationApp({"headless": args_cli.headless})

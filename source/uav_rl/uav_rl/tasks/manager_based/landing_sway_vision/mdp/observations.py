@@ -6,6 +6,14 @@ import torch
 
 from isaaclab.utils import math as math_utils
 
+from ...landing_sway.mdp.observations import (
+    projected_gravity_noisy,
+    root_ang_vel_rel,
+    root_lin_vel_rel,
+    root_pos_rel,
+    root_quat_rel,
+)
+
 
 class _VisionObservationState:
     def __init__(self, num_envs: int, device: torch.device | str):
@@ -527,6 +535,16 @@ def vision_line_of_sight(env) -> torch.Tensor:
 
 def vision_status(env) -> torch.Tensor:
     return _update_vision_cache(env).cached_status
+
+
+def vision_available(env) -> torch.Tensor:
+    """Scalar 0/1 availability flag matching `/ar_pose/raw.rel_pos_valid` semantics.
+
+    This task does not subscribe to ROS directly. Instead, it runs the same vision logic on-torch inside
+    the environment, so the availability bit is exposed as a float tensor for policy consumption.
+    """
+    state = _update_vision_cache(env)
+    return state.raw_valid.to(dtype=state.cached_rel_pos.dtype).unsqueeze(-1)
 
 
 def vision_raw_rel_pos(env) -> torch.Tensor:

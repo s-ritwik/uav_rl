@@ -4,8 +4,8 @@ from pathlib import Path
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -18,14 +18,15 @@ from isaaclab.utils import configclass
 from uav_rl.assets import IRIS_CFG
 
 from . import mdp
-from .landing_sway_vision_post_init_cfg import PLATFORM_STAGE_TRACK_XY_CFG, LandingSwayVisionPostInitCfg
+from .heave_landing_post_init_cfg import HeaveLandingPostInitCfg
 
 PLATFORM_ARUCO_TEXTURE_PATH = (
     Path(__file__).resolve().parents[3] / "assets" / "Aruco" / "aruco_mark_fractal.png"
 )
+HEAVE_TRAIN_DATA_DIR = Path(__file__).resolve().parent / "train_data_normalised"
 
 @configclass
-class LandingSwaySceneCfg(InteractiveSceneCfg):
+class HeaveLandingSceneCfg(InteractiveSceneCfg):
     """Scene config: local Iris on a flat plane."""
 
     ground = AssetBaseCfg(
@@ -90,8 +91,8 @@ class LandingSwaySceneCfg(InteractiveSceneCfg):
 class ActionsCfg:
     """Policy action is [vx, vy, vz, yaw_rate]."""
 
-    control = mdp.LandingSwayVelocityActionCfg(
-        class_type=mdp.LandingSwayVelocityAction,
+    control = mdp.HeaveLandingVelocityActionCfg(
+        class_type=mdp.HeaveLandingVelocityAction,
         asset_name="robot",
         action_scale=(1.0, 1.0, 1.0, 1.0),
         action_offset=(0.0, 0.0, 0.0, 0.0),
@@ -109,12 +110,14 @@ class ObservationsCfg:
 
     @configclass
     class PolicyCfg(ObsGroup):
-        vision_rel_pos = ObsTerm(func=mdp.vision_rel_pos)
-        vision_rel_lin_vel = ObsTerm(func=mdp.vision_rel_lin_vel)
-        vision_rel_quat = ObsTerm(func=mdp.vision_rel_quat)
+        """Actor observations."""
+
+        root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
+        root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
+        root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
+        root_ang_vel_rel = ObsTerm(func=mdp.root_ang_vel_rel)
         projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
         last_action = ObsTerm(func=mdp.last_action)
-        vision_available = ObsTerm(func=mdp.vision_available)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -122,16 +125,32 @@ class ObservationsCfg:
 
     @configclass
     class CriticCfg(ObsGroup):
-        vision_rel_pos = ObsTerm(func=mdp.vision_rel_pos)
-        vision_rel_lin_vel = ObsTerm(func=mdp.vision_rel_lin_vel)
-        vision_rel_quat = ObsTerm(func=mdp.vision_rel_quat)
+        """Critic observations with privileged future heave information."""
+
+        root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
+        root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
+        root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
+        root_ang_vel_rel = ObsTerm(func=mdp.root_ang_vel_rel)
         projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
         last_action = ObsTerm(func=mdp.last_action)
-        vision_available = ObsTerm(func=mdp.vision_available)
 
-        true_root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
-        true_root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
-        true_root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
+        future_platform_pos_z_w = ObsTerm(
+            func=mdp.future_platform_pos_z_w,
+            params={"horizon_s": 6.0, "sample_rate_hz": 20.0},
+        )
+        robot_root_lin_vel_w = ObsTerm(func=mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        platform_root_lin_vel_w = ObsTerm(func=mdp.root_lin_vel_w, params={"asset_cfg": SceneEntityCfg("platform")})
+        cbf_h0_features = ObsTerm(
+            func=mdp.heave_cbf_features,
+            params={
+                "d_min_m": 0.156,
+                "landing_velocity_mps": -0.2,
+                "a_rel_mps2": 0.7,
+                "eps": 1.0e-4,
+                "asset_cfg": SceneEntityCfg("robot"),
+                "reference_asset_cfg": SceneEntityCfg("platform"),
+            },
+        )
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -146,10 +165,10 @@ class EventCfg:
     """Environment reset terms."""
 
     domain_randomization = EventTerm(
-        func=mdp.SampleLandingSwayDomainRandomization,
+        func=mdp.SampleHeaveLandingDomainRandomization,
         mode="reset",
         params={
-            "rand_cfg": mdp.LandingSwayDomainRandomizationCfg(),
+            "rand_cfg": mdp.HeaveLandingDomainRandomizationCfg(),
             "mass_asset_cfg": SceneEntityCfg("robot", body_names=["body"]),
         },
     )
@@ -160,20 +179,24 @@ class EventCfg:
         params={
             "platform_name": "platform",
             "platform_size": (1.0, 1.0, 0.2),
-            "decal_size_xy": (0.70, 0.70),
             "texture_path": str(PLATFORM_ARUCO_TEXTURE_PATH),
         },
     )
 
     move_platform = EventTerm(
-        func=mdp.MultiSinePlatformMotion,
+        func=mdp.CSVHeavePlatformMotion,
         mode="interval",
         interval_range_s=(0.0, 0.0),
         is_global_time=True,
         params={
             "asset_cfg": SceneEntityCfg("platform"),
-            # Swap this preset as training progresses: XY -> deck attitude -> heave.
-            "stage_cfg": PLATFORM_STAGE_TRACK_XY_CFG,
+            "dataset_dir": str(HEAVE_TRAIN_DATA_DIR),
+            "sample_rate_hz": 20.0,
+            "min_remaining_s": 60.0,
+            "scale": 1.0,
+            "bias_m": 1.5,
+            "randomize_bias": False,
+            "bias_range_m": (0.5, 2.5),
             "stationary_env_probability": 0.0,
         },
     )
@@ -250,6 +273,18 @@ class RewardsCfg:
             "reference_asset_cfg": SceneEntityCfg("platform"),
         },
     )
+    cbf_h0 = RewTerm(
+        func=mdp.heave_cbf_h0_signed,
+        weight=1.0,
+        params={
+            "d_min_m": 0.156,
+            "landing_velocity_mps": -0.2,
+            "a_rel_mps2": 0.7,
+            "eps": 1.0e-4,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "reference_asset_cfg": SceneEntityCfg("platform"),
+        },
+    )
 
     # Stabilize around the hover setpoint.
     horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.08)
@@ -293,6 +328,9 @@ class RewardsCfg:
             "good_touchdown_reward": 5.0,
             "bad_touchdown_reward": -2.0,
             "center_proximity_bonus": 0.0,
+            "low_touchdown_speed_bonus": 0.0,
+            "low_platform_vertical_speed_bonus": 0.0,
+            "platform_vertical_speed_bonus_scale_mps": 0.25,
             "asset_cfg": SceneEntityCfg("robot"),
             "reference_asset_cfg": SceneEntityCfg("platform"),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),
@@ -347,6 +385,18 @@ class TerminationsCfg:
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names="body"),
         },
     )
+    cbf_h0_negative = DoneTerm(
+        func=mdp.heave_cbf_h0_negative,
+        params={
+            "enabled": True,
+            "d_min_m": 0.156,
+            "landing_velocity_mps": -0.2,
+            "a_rel_mps2": 0.7,
+            "eps": 1.0e-4,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "reference_asset_cfg": SceneEntityCfg("platform"),
+        },
+    )
     crash_low = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.1})
     crash_high = DoneTerm(func=mdp.root_height_above_maximum, params={"maximum_height": 7.0})
     out_of_bounds = DoneTerm(func=mdp.root_distance_from_origin, params={"max_distance": 9.0})
@@ -369,16 +419,29 @@ class CurriculumCfg:
             "target_touchdown_yaw_deg": 0.0,
         },
     )
+    cbf_h0_metrics = CurrTerm(
+        func=mdp.heave_cbf_h0_metrics,
+        params={
+            "margin_m": 0.2,
+            "d_min_m": 0.156,
+            "gamma": 4.0,
+            "landing_velocity_mps": -0.2,
+            "a_rel_mps2": 0.7,
+            "eps": 1.0e-4,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "reference_asset_cfg": SceneEntityCfg("platform"),
+        },
+    )
 
 
 @configclass
-class LandingSwayVisionEnvCfg(ManagerBasedRLEnvCfg):
-    """Manager-based landing-sway UAV environment using Iris + PX4-like controller."""
+class HeaveLandingEnvCfg(ManagerBasedRLEnvCfg):
+    """Manager-based heave-landing UAV environment using Iris + PX4-like controller."""
 
-    scene: LandingSwaySceneCfg = LandingSwaySceneCfg(num_envs=1024, env_spacing=10.0)
+    scene: HeaveLandingSceneCfg = HeaveLandingSceneCfg(num_envs=1024, env_spacing=10.0)
 
-    post_init_cfg: LandingSwayVisionPostInitCfg = LandingSwayVisionPostInitCfg()
-    domain_randomization: mdp.LandingSwayDomainRandomizationCfg = mdp.LandingSwayDomainRandomizationCfg()
+    post_init_cfg: HeaveLandingPostInitCfg = HeaveLandingPostInitCfg()
+    domain_randomization: mdp.HeaveLandingDomainRandomizationCfg = mdp.HeaveLandingDomainRandomizationCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventCfg = EventCfg()
@@ -388,7 +451,7 @@ class LandingSwayVisionEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = 10
-        self.episode_length_s = 10.0
+        self.episode_length_s = 40.0 # timeout after 40 s
         self.post_init_cfg.apply(self)
 
         # Required so contact sensors receive contact reports from the USD articulation.
@@ -398,7 +461,8 @@ class LandingSwayVisionEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = (-5.0, -5.0, 2.0)
         self.viewer.resolution = (1920, 1080)
 
-        self.sim.dt = 1.0 / 250.0
+        # Make one policy/environment step exactly 0.05 s = 20 Hz.
+        self.sim.dt = 1.0 / 200.0
         self.sim.render_interval = self.decimation
         self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",

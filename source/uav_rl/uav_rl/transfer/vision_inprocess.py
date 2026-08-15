@@ -31,6 +31,7 @@ class InProcessVisionConfig:
     camera_matrix: np.ndarray
     distortion_coefficients: np.ndarray
     camera_to_uav_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    camera_to_uav_rotation_matrix: np.ndarray | None = None
     detector_fps: float = 20.0
     resolution: tuple[int, int] = (640, 360)
     display_scale: float = 0.5
@@ -168,6 +169,7 @@ class InProcessFractalVisionSystem:
         self._aruco_detectors = self._build_detectors(self._marker_definitions)
         self._node = None
         self._image_sub = None
+        self._camera = None
         self._stream_started = False
         self._latest_frame_bgr: np.ndarray | None = None
         self._latest_frame_seq = 0
@@ -194,6 +196,7 @@ class InProcessFractalVisionSystem:
         self._last_no_image_log_s = 0.0
         self._overlay_available = bool(config.enable_overlay)
         self._overlay_window: OmniVisionOverlayWindow | None = None
+        self._direct_camera_info_logged = False
         self.last_estimate = VisionPoseEstimate(
             stamp_s=0.0,
             header_stamp_sec=0,
@@ -306,6 +309,35 @@ class InProcessFractalVisionSystem:
                 self._overlay_available = False
                 print(f"[vision_inprocess] disabling overlay viewer because omni.ui window creation failed: {exc}")
         try:
+            from isaacsim.sensors.camera import Camera
+
+            self._camera = Camera(
+                prim_path=self.config.camera_prim_path,
+                resolution=tuple(int(v) for v in self.config.resolution),
+                frequency=max(float(self.config.detector_fps), 1.0),
+            )
+            self._camera.initialize()
+            try:
+                intrinsics = np.asarray(self._camera.get_intrinsics_matrix(device="cpu"), dtype=np.float64)
+                self.config.camera_matrix = intrinsics
+                self.config.distortion_coefficients = np.zeros((5,), dtype=np.float64)
+                self.config.resolution = tuple(int(v) for v in self._camera.get_resolution())
+                print(
+                    "[vision_inprocess] direct camera ready "
+                    f"resolution={self.config.resolution} "
+                    f"camera_matrix={self.config.camera_matrix.tolist()} "
+                    "distortion=[0.0, 0.0, 0.0, 0.0, 0.0]"
+                )
+            except Exception as exc:
+                print(f"[vision_inprocess] unable to query direct camera intrinsics, keeping configured values: {exc}")
+            self._stream_started = True
+            self._next_update_s = time.monotonic()
+            return
+        except Exception as exc:
+            self._camera = None
+            print(f"[vision_inprocess] direct camera capture unavailable, falling back to ROS topic: {exc}")
+
+        try:
             rclpy.init()
         except Exception:
             pass
@@ -328,6 +360,12 @@ class InProcessFractalVisionSystem:
         return float(now_s) >= float(self._next_update_s)
 
     def stop(self) -> None:
+        if self._camera is not None:
+            try:
+                self._camera.destroy()
+            except Exception:
+                pass
+        self._camera = None
         if self._node is not None:
             try:
                 self._node.destroy_node()
@@ -346,16 +384,17 @@ class InProcessFractalVisionSystem:
 
     def update(self) -> VisionPoseEstimate | None:
         if not self._stream_started or self._node is None:
-            return None
-
-        try:
-            rclpy.spin_once(self._node, timeout_sec=0.0)
-        except ExternalShutdownException:
-            return None
-        except Exception:
-            if not rclpy.ok():
+            if self._camera is None:
                 return None
-            raise
+        elif self._camera is None:
+            try:
+                rclpy.spin_once(self._node, timeout_sec=0.0)
+            except ExternalShutdownException:
+                return None
+            except Exception:
+                if not rclpy.ok():
+                    return None
+                raise
 
         now_s = time.monotonic()
         period = 1.0 / max(float(self.config.detector_fps), 1.0)
@@ -363,21 +402,59 @@ class InProcessFractalVisionSystem:
             return None
         self._next_update_s = now_s + period
 
-        image_stale = self._last_image_wall_time_s > 0.0 and (now_s - self._last_image_wall_time_s) > max(1.0, 3.0 * period)
-        if self._latest_frame_bgr is None or image_stale:
-            if (now_s - self._last_no_image_log_s) > 2.0:
-                self._last_no_image_log_s = now_s
+        if self._camera is not None:
+            try:
+                rgba = np.asarray(self._camera.get_rgba(device="cpu"))
+            except Exception as exc:
+                if (now_s - self._last_no_image_log_s) > 2.0:
+                    self._last_no_image_log_s = now_s
+                    print(f"[vision_inprocess] waiting for direct camera frame: {exc}")
+                return None
+            if rgba.size == 0:
+                if (now_s - self._last_no_image_log_s) > 2.0:
+                    self._last_no_image_log_s = now_s
+                    print("[vision_inprocess] waiting for direct camera frame: empty RGBA buffer")
+                return None
+            if rgba.dtype != np.uint8:
+                rgba = np.clip(rgba, 0, 255).astype(np.uint8)
+            frame_bgr = cv2.cvtColor(rgba[:, :, :4], cv2.COLOR_RGBA2BGR)
+            actual_height, actual_width = frame_bgr.shape[:2]
+            if (actual_width, actual_height) != tuple(self.config.resolution):
+                previous_width = max(int(self.config.resolution[0]), 1)
+                previous_height = max(int(self.config.resolution[1]), 1)
+                scale_x = float(actual_width) / float(previous_width)
+                scale_y = float(actual_height) / float(previous_height)
+                self.config.camera_matrix[0, 0] *= scale_x
+                self.config.camera_matrix[1, 1] *= scale_y
+                self.config.camera_matrix[0, 2] *= scale_x
+                self.config.camera_matrix[1, 2] *= scale_y
+                self.config.resolution = (actual_width, actual_height)
+            if not self._direct_camera_info_logged:
+                self._direct_camera_info_logged = True
                 print(
-                    "[vision_inprocess] waiting for image topic "
-                    f"'{self.config.image_topic}' last_image_age={now_s - self._last_image_wall_time_s:.2f}s"
+                    "[vision_inprocess] direct camera frame "
+                    f"shape={frame_bgr.shape} "
+                    f"camera_matrix={self.config.camera_matrix.tolist()}"
                 )
-            return None
-        if self._latest_frame_seq == self._processed_frame_seq:
-            return None
-        frame_bgr = self._latest_frame_bgr.copy()
-        if frame_bgr.size == 0:
-            return None
-        self._processed_frame_seq = self._latest_frame_seq
+            wall_ns = time.time_ns()
+            self._latest_header_stamp_sec = int(wall_ns // 1_000_000_000)
+            self._latest_header_stamp_nanosec = int(wall_ns % 1_000_000_000)
+        else:
+            image_stale = self._last_image_wall_time_s > 0.0 and (now_s - self._last_image_wall_time_s) > max(1.0, 3.0 * period)
+            if self._latest_frame_bgr is None or image_stale:
+                if (now_s - self._last_no_image_log_s) > 2.0:
+                    self._last_no_image_log_s = now_s
+                    print(
+                        "[vision_inprocess] waiting for image topic "
+                        f"'{self.config.image_topic}' last_image_age={now_s - self._last_image_wall_time_s:.2f}s"
+                    )
+                return None
+            if self._latest_frame_seq == self._processed_frame_seq:
+                return None
+            frame_bgr = self._latest_frame_bgr.copy()
+            if frame_bgr.size == 0:
+                return None
+            self._processed_frame_seq = self._latest_frame_seq
         estimate, overlay = self._process_frame(frame_bgr, now_s)
         self.last_estimate = estimate
         if self.config.enable_overlay and self._overlay_available:
@@ -604,8 +681,14 @@ class InProcessFractalVisionSystem:
         offset_cam = np.asarray(self.config.camera_to_uav_offset, dtype=np.float64).reshape(3, 1)
         offset_marker = r_cam_marker @ offset_cam
         out_t = (t_cam_marker + offset_marker).reshape(3)
-        r_flip = np.diag([1.0, -1.0, -1.0])
-        r_uav_marker = r_flip @ r_cam_marker
+
+        if self.config.camera_to_uav_rotation_matrix is not None:
+            r_cam_uav = np.asarray(self.config.camera_to_uav_rotation_matrix, dtype=np.float64).reshape(3, 3)
+            r_uav_marker = r_cam_marker @ r_cam_uav
+        else:
+            r_flip = np.diag([1.0, -1.0, -1.0])
+            r_uav_marker = r_flip @ r_cam_marker
+
         out_rvec, _ = cv2.Rodrigues(r_uav_marker)
         out_quat = Rotation.from_matrix(r_uav_marker).as_quat().astype(np.float64)
         roll, pitch, yaw = Rotation.from_matrix(r_uav_marker).as_euler("xyz", degrees=False)

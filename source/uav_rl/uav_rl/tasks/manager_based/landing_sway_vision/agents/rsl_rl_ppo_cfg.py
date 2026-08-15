@@ -9,7 +9,7 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 2000
     save_interval = 100
     experiment_name = "landing_sway_vision"
-    obs_groups = {"policy": ["policy"], "critic": ["policy"]}
+    obs_groups = {"policy": ["policy"], "critic": ["critic"]}
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
         noise_std_type="log",

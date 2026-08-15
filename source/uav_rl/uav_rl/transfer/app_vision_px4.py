@@ -11,6 +11,7 @@ import atexit
 import traceback
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -31,6 +32,8 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument("--num_drones", type=int, default=1, help="Number of drones to spawn.")
 parser.add_argument("--gap_x_axis", type=float, default=1.0, help="Spacing between vehicles along x [m].")
+parser.add_argument("--drone_spawn_x", type=float, default=1.5, help="Initial drone x-position for vehicle 0 [m].")
+parser.add_argument("--drone_spawn_y", type=float, default=0.0, help="Initial drone y-position for all vehicles [m].")
 parser.add_argument("--headless", action="store_true", help="Run Isaac Sim headless.")
 parser.add_argument("--namespace", type=str, default="transfer", help="ROS 2 topic namespace prefix.")
 parser.add_argument(
@@ -69,7 +72,7 @@ parser.add_argument(
     default=None,
     help="Override the PX4 airframe model used by Pegasus. Defaults to PegasusInterface().px4_default_airframe.",
 )
-parser.add_argument("--platform_x", type=float, default=1.5, help="Platform center x-position [m].")
+parser.add_argument("--platform_x", type=float, default=0.0, help="Platform center x-position [m].")
 parser.add_argument("--platform_y", type=float, default=0.0, help="Platform center y-position [m].")
 parser.add_argument("--platform_z", type=float, default=0.1, help="Platform center z-position [m].")
 parser.add_argument(
@@ -336,13 +339,50 @@ if args_cli.platform_texture is None:
     args_cli.platform_texture = str(PLATFORM_ARUCO_TEXTURE_PATH)
 
 
+def _measure_texture_active_fill_ratio(texture_path: str | Path, *, threshold: int = 245) -> tuple[float, float]:
+    """Estimate how much of the texture width/height is occupied by the non-white marker content."""
+
+    try:
+        from PIL import Image
+    except Exception:
+        return (1.0, 1.0)
+
+    try:
+        image = Image.open(Path(texture_path).expanduser().resolve()).convert("L")
+        pixels = np.asarray(image, dtype=np.uint8)
+    except Exception:
+        return (1.0, 1.0)
+
+    mask = pixels < int(threshold)
+    if not np.any(mask):
+        return (1.0, 1.0)
+
+    ys, xs = np.nonzero(mask)
+    fill_x = float(xs.max() - xs.min() + 1) / float(pixels.shape[1])
+    fill_y = float(ys.max() - ys.min() + 1) / float(pixels.shape[0])
+    return (max(fill_x, 1.0e-6), max(fill_y, 1.0e-6))
+
+
+def _compute_decal_size_for_active_marker(
+    texture_path: str | Path, requested_marker_size_xy: tuple[float, float]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Scale the full textured quad so the active fractal itself matches the requested physical size."""
+
+    fill_ratio_x, fill_ratio_y = _measure_texture_active_fill_ratio(texture_path)
+    decal_size_xy = (
+        float(requested_marker_size_xy[0]) / fill_ratio_x,
+        float(requested_marker_size_xy[1]) / fill_ratio_y,
+    )
+    return decal_size_xy, (fill_ratio_x, fill_ratio_y)
+
+
 def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
     """Remove orphan PX4 SITL processes for the requested instance before relaunch."""
 
     px4_binary = str((Path(px4_dir).expanduser() / "build" / "px4_sitl_default" / "bin" / "px4").resolve())
     try:
         result = subprocess.run(
-            ["ps", "-eo", "pid=", "args="],
+            ["ps", "-eo", "pid=,pgid=,args="],
             check=False,
             capture_output=True,
             text=True,
@@ -350,21 +390,45 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
     except Exception:
         return
 
-    matching_pids: list[int] = []
+    matching_pids: set[int] = set()
+    matching_pgids: set[int] = set()
     instance_token = f" -i {int(vehicle_id)} "
+    mavlink_token = f"px4-simulator_mavlink --instance {int(vehicle_id)} "
+    rcs_token = f"/init.d-posix/rcS {int(vehicle_id)}"
+    own_pgid = os.getpgid(0)
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
-        if not line or px4_binary not in line or instance_token not in f" {line} ":
+        if not line:
             continue
         try:
-            pid_text, _ = line.split(" ", 1)
+            pid_text, pgid_text, args_text = line.split(None, 2)
             pid = int(pid_text)
+            pgid = int(pgid_text)
         except ValueError:
             continue
-        if pid != os.getpid():
-            matching_pids.append(pid)
+        if pid == os.getpid():
+            continue
 
-    for pid in matching_pids:
+        padded_args = f" {args_text} "
+        is_px4_main = px4_binary in args_text and instance_token in padded_args
+        is_px4_mavlink = mavlink_token in args_text
+        is_px4_rcs_shell = rcs_token in args_text
+        if not (is_px4_main or is_px4_mavlink or is_px4_rcs_shell):
+            continue
+
+        matching_pids.add(pid)
+        if pgid > 0 and pgid != own_pgid:
+            matching_pgids.add(pgid)
+
+    for pgid in sorted(matching_pgids):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+
+    for pid in sorted(matching_pids):
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -372,7 +436,7 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
         except Exception:
             continue
 
-    if matching_pids:
+    if matching_pids or matching_pgids:
         time.sleep(0.5)
 
 simulation_app_config = {"headless": args_cli.headless}
@@ -390,7 +454,7 @@ enable_extension("isaacsim.sensors.camera")
 
 from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 from pymavlink import mavutil
-from pxr import PhysxSchema, Sdf, Usd, UsdPhysics, UsdShade
+from pxr import PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 from scipy.spatial.transform import Rotation
 import rclpy
 from std_msgs.msg import Bool
@@ -418,6 +482,15 @@ except ImportError:
 
 class PX4Ros2VelocityBridge(Backend):
     """ROS 2 backend that drives PX4 OFFBOARD velocity control from geometry_msgs/Twist."""
+
+    _xy_align_tolerance_m = 0.10
+    _xy_align_speed_tolerance_mps = 0.10
+    _xy_align_kp = 0.8
+    _xy_align_max_speed_mps = 0.75
+    _hold_xy_kp = 0.8
+    _hold_xy_max_speed_mps = 0.50
+    _hold_z_kp = 0.8
+    _hold_z_max_speed_mps = 0.35
 
     def __init__(
         self,
@@ -464,9 +537,12 @@ class PX4Ros2VelocityBridge(Backend):
 
         self._current_altitude = 0.0
         self._current_vertical_speed = 0.0
+        self._current_xy = np.zeros(2, dtype=np.float32)
+        self._current_xy_speed = np.zeros(2, dtype=np.float32)
         self._takeoff_target_altitude = None
         self._last_takeoff_log_time = 0.0
         self._px4_ready_for_takeoff = False
+        self._target_xy = np.array([float(args_cli.platform_x), float(args_cli.platform_y)], dtype=np.float32)
 
         self._latest_cmd = Twist()
         self._last_cmd_time = 0.0
@@ -602,17 +678,26 @@ class PX4Ros2VelocityBridge(Backend):
     def _desired_velocity_enu(self, now: float) -> tuple[np.ndarray, float]:
         if self._takeoff_state == "ready":
             cmd_age = now - self._last_cmd_time
-            if self._last_cmd_time == 0.0 or cmd_age > self._cmd_timeout:
-                return np.zeros(3, dtype=np.float32), 0.0
-            vel_enu = np.array(
-                [
-                    float(self._latest_cmd.linear.x),
-                    float(self._latest_cmd.linear.y),
-                    float(self._latest_cmd.linear.z),
-                ],
-                dtype=np.float32,
-            )
-            return vel_enu, -float(self._latest_cmd.angular.z)
+            if self._last_cmd_time != 0.0 and cmd_age <= self._cmd_timeout:
+                vel_enu = np.array(
+                    [
+                        float(self._latest_cmd.linear.x),
+                        float(self._latest_cmd.linear.y),
+                        float(self._latest_cmd.linear.z),
+                    ],
+                    dtype=np.float32,
+                )
+                return vel_enu, -float(self._latest_cmd.angular.z)
+
+            xy_error = self._target_xy - self._current_xy
+            xy_cmd = np.clip(
+                self._hold_xy_kp * xy_error,
+                -self._hold_xy_max_speed_mps,
+                self._hold_xy_max_speed_mps,
+            ).astype(np.float32)
+            z_error = self._current_takeoff_target_altitude() - self._current_altitude
+            z_cmd = float(np.clip(self._hold_z_kp * z_error, -self._hold_z_max_speed_mps, self._hold_z_max_speed_mps))
+            return np.array([xy_cmd[0], xy_cmd[1], z_cmd], dtype=np.float32), 0.0
 
         if self._auto_takeoff_alt <= 0.0:
             return np.zeros(3, dtype=np.float32), 0.0
@@ -623,6 +708,15 @@ class PX4Ros2VelocityBridge(Backend):
             climb_speed = min(1.0, max(0.25, 0.8 * alt_error))
         elif alt_error < -0.15:
             climb_speed = max(-0.6, min(-0.15, 0.8 * alt_error))
+
+        if self._takeoff_state == "align_xy":
+            xy_error = self._target_xy - self._current_xy
+            xy_cmd = np.clip(
+                self._xy_align_kp * xy_error,
+                -self._xy_align_max_speed_mps,
+                self._xy_align_max_speed_mps,
+            ).astype(np.float32)
+            return np.array([xy_cmd[0], xy_cmd[1], climb_speed], dtype=np.float32), 0.0
 
         return np.array([0.0, 0.0, climb_speed], dtype=np.float32), 0.0
 
@@ -707,7 +801,7 @@ class PX4Ros2VelocityBridge(Backend):
         if requested_action:
             return
 
-        if self._offboard_enabled and self._armed and self._takeoff_state != "taking_off":
+        if self._offboard_enabled and self._armed and self._takeoff_state == "pending":
             self._takeoff_state = "taking_off"
             self._ready_since = None
             carb.log_warn(
@@ -743,11 +837,33 @@ class PX4Ros2VelocityBridge(Backend):
         carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: requested force disarm")
 
     def _update_takeoff_state(self, now: float):
-        if self._takeoff_state != "taking_off":
+        altitude_error = abs(self._current_altitude - self._current_takeoff_target_altitude())
+        xy_error = self._target_xy - self._current_xy
+        xy_error_norm = float(np.linalg.norm(xy_error))
+        xy_speed_norm = float(np.linalg.norm(self._current_xy_speed))
+
+        if self._takeoff_state == "taking_off":
+            if altitude_error <= 0.15 and abs(self._current_vertical_speed) <= 0.15:
+                self._takeoff_state = "align_xy"
+                self._ready_since = None
+                carb.log_warn(
+                    f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: aligning over platform center "
+                    f"target_xy=({self._target_xy[0]:.2f}, {self._target_xy[1]:.2f})"
+                )
+            else:
+                self._ready_since = None
             return
 
-        altitude_error = abs(self._current_altitude - self._current_takeoff_target_altitude())
-        if altitude_error <= 0.15 and abs(self._current_vertical_speed) <= 0.15:
+        if self._takeoff_state != "align_xy":
+            return
+
+        aligned_xy = (
+            xy_error_norm <= self._xy_align_tolerance_m
+            and xy_speed_norm <= self._xy_align_speed_tolerance_mps
+        )
+        aligned_z = altitude_error <= 0.15 and abs(self._current_vertical_speed) <= 0.15
+
+        if aligned_xy and aligned_z:
             if self._ready_since is None:
                 self._ready_since = now
             elif now - self._ready_since >= 0.5:
@@ -765,6 +881,8 @@ class PX4Ros2VelocityBridge(Backend):
     def update_state(self, state):
         self._current_altitude = float(state.position[2])
         self._current_vertical_speed = float(state.linear_velocity[2])
+        self._current_xy = np.asarray(state.position[:2], dtype=np.float32)
+        self._current_xy_speed = np.asarray(state.linear_velocity[:2], dtype=np.float32)
         if self._auto_takeoff_alt > 0.0 and self._takeoff_target_altitude is None:
             self._takeoff_target_altitude = self._current_altitude + self._auto_takeoff_alt
 
@@ -811,6 +929,8 @@ class PX4Ros2VelocityBridge(Backend):
         self._prestream_count = 0
         self._takeoff_state = "pending" if self._auto_takeoff_alt > 0.0 else "ready"
         self._ready_since = None
+        self._current_xy = np.zeros(2, dtype=np.float32)
+        self._current_xy_speed = np.zeros(2, dtype=np.float32)
         self._takeoff_target_altitude = None
         self._last_takeoff_log_time = 0.0
         self._px4_ready_for_takeoff = False
@@ -847,6 +967,8 @@ class PX4Ros2VelocityBridge(Backend):
         self._prestream_count = 0
         self._takeoff_state = "pending" if self._auto_takeoff_alt > 0.0 else "ready"
         self._ready_since = None
+        self._current_xy = np.zeros(2, dtype=np.float32)
+        self._current_xy_speed = np.zeros(2, dtype=np.float32)
         self._takeoff_target_altitude = None
         self._last_takeoff_log_time = 0.0
         self._px4_ready_for_takeoff = False
@@ -1076,6 +1198,7 @@ class PegasusApp:
         self.world = self.pg.world
 
         self.pg.load_environment(SIMULATION_ENVIRONMENTS["Curved Gridroom"])
+        self._force_default_light_rig()
 
         self.stop_sim = False
         self._shutdown_complete = False
@@ -1085,6 +1208,7 @@ class PegasusApp:
         self.px4_backends = []
         self.vision_system: InProcessFractalVisionSystem | None = None
         self._vision_system_started = False
+        self._vision_disabled_logged = False
         self.platform_motion_enabled = args_cli.motion_stage != "stationary"
         self.platform_motion_started = not self.platform_motion_enabled
         self.vision_pose_publisher: VisionPoseTopicPublisherProcess | None = None
@@ -1107,6 +1231,18 @@ class PegasusApp:
         else:
             platform_stage_cfg = _build_platform_stage_cfg(args_cli.motion_stage)
 
+        requested_marker_size_xy = (float(args_cli.vision_marker_size_m), float(args_cli.vision_marker_size_m))
+        platform_top_decal_size_xy, marker_fill_ratio_xy = _compute_decal_size_for_active_marker(
+            args_cli.platform_texture, requested_marker_size_xy
+        )
+        if any(abs(a - b) > 1.0e-6 for a, b in zip(platform_top_decal_size_xy, requested_marker_size_xy)):
+            carb.log_warn(
+                "[transfer.app_px4] Adjusted platform decal size to preserve active fractal size "
+                f"requested_marker_size={list(requested_marker_size_xy)} "
+                f"texture_fill_ratio={list(marker_fill_ratio_xy)} "
+                f"decal_size={list(platform_top_decal_size_xy)}"
+            )
+
         self.platform = MovingPlatform(
             self.world,
             texture_path=args_cli.platform_texture,
@@ -1117,7 +1253,7 @@ class PegasusApp:
             size=PLATFORM_SIZE,
             base_position=(args_cli.platform_x, args_cli.platform_y, args_cli.platform_z),
             add_top_decal=True,
-            top_decal_size_xy=(float(args_cli.vision_marker_size_m), float(args_cli.vision_marker_size_m)),
+            top_decal_size_xy=platform_top_decal_size_xy,
         )
         self._apply_platform_physics_material()
         self.world.add_physics_callback("platform_motion", self._on_platform_physics_step)
@@ -1183,7 +1319,7 @@ class PegasusApp:
             f"/World/drone{vehicle_id}",
             IRIS_USD_PATH,
             vehicle_id,
-            [gap_x_axis * vehicle_id, 0.0, 0.07],
+            [args_cli.drone_spawn_x + gap_x_axis * vehicle_id, args_cli.drone_spawn_y, 0.07],
             Rotation.from_euler("XYZ", [0.0, 0.0, 0.0], degrees=True).as_quat(),
             config=config_multirotor,
         )
@@ -1297,33 +1433,77 @@ class PegasusApp:
                 f"image_topic='{args_cli.vision_image_topic}'"
             )
 
+    def _force_default_light_rig(self) -> None:
+        try:
+            import carb.settings
+            import omni.kit.actions.core
+            import omni.usd
+
+            settings = carb.settings.get_settings()
+            settings.set("/persistent/exts/omni.kit.viewport.menubar.lighting/autoLightRig/enabled", True)
+            settings.set("/persistent/exts/omni.kit.viewport.menubar.lighting/autoLightRig/searchFromDefaultPrim", False)
+            settings.set("/exts/omni.kit.viewport.menubar.lighting/preserveActiveRig", False)
+
+            usd_context = omni.usd.get_context()
+            set_lighting_mode = omni.kit.actions.core.get_action_registry().get_action(
+                "omni.kit.viewport.menubar.lighting", "set_lighting_mode_rig"
+            )
+            if set_lighting_mode is not None:
+                set_lighting_mode.execute("Default", usd_context=usd_context)
+                carb.log_warn("[transfer.app_px4] Forced viewport lighting mode to 'Default'")
+        except Exception as exc:
+            carb.log_warn(f"[transfer.app_px4] Failed to force default light rig: {exc}")
+
     def _get_camera_calibration(self, camera_path: str, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
         camera_prim = self.world.stage.GetPrimAtPath(camera_path)
-        lens_distortion_model = camera_prim.GetAttribute("omni:lensdistortion:model").Get()
+        if not camera_prim or not camera_prim.IsValid():
+            raise RuntimeError(f"Camera prim '{camera_path}' does not exist")
+
+        def _get_attr(name: str):
+            attr = camera_prim.GetAttribute(name)
+            if not attr or not attr.IsValid():
+                return None
+            value = attr.Get()
+            return value
+
+        projection_type = _get_attr("cameraProjectionType")
+        lens_distortion_model = _get_attr("omni:lensdistortion:model")
 
         if lens_distortion_model == "opencvPinhole":
-            fx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:fx").Get())
-            fy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:fy").Get())
-            cx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:cx").Get())
-            cy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvPinhole:cy").Get())
+            fx = float(_get_attr("omni:lensdistortion:opencvPinhole:fx"))
+            fy = float(_get_attr("omni:lensdistortion:opencvPinhole:fy"))
+            cx = float(_get_attr("omni:lensdistortion:opencvPinhole:cx"))
+            cy = float(_get_attr("omni:lensdistortion:opencvPinhole:cy"))
             distortion = [
-                float(camera_prim.GetAttribute(f"omni:lensdistortion:opencvPinhole:{name}").Get())
+                float(_get_attr(f"omni:lensdistortion:opencvPinhole:{name}"))
                 for name in ("k1", "k2", "p1", "p2", "k3")
             ]
         elif lens_distortion_model == "opencvFisheye":
-            fx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:fx").Get())
-            fy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:fy").Get())
-            cx = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:cx").Get())
-            cy = float(camera_prim.GetAttribute("omni:lensdistortion:opencvFisheye:cy").Get())
+            fx = float(_get_attr("omni:lensdistortion:opencvFisheye:fx"))
+            fy = float(_get_attr("omni:lensdistortion:opencvFisheye:fy"))
+            cx = float(_get_attr("omni:lensdistortion:opencvFisheye:cx"))
+            cy = float(_get_attr("omni:lensdistortion:opencvFisheye:cy"))
             distortion = [
-                float(camera_prim.GetAttribute(f"omni:lensdistortion:opencvFisheye:{name}").Get())
+                float(_get_attr(f"omni:lensdistortion:opencvFisheye:{name}"))
                 for name in ("k1", "k2", "k3", "k4")
             ]
             distortion.append(0.0)
+        elif projection_type in ("pinhole", "pinholeOpenCV"):
+            fx = float(_get_attr("openCVFx"))
+            fy = float(_get_attr("openCVFy"))
+            cx = float(_get_attr("openCVCx") if _get_attr("openCVCx") is not None else _get_attr("fthetaCx"))
+            cy = float(_get_attr("openCVCy") if _get_attr("openCVCy") is not None else _get_attr("fthetaCy"))
+            distortion = [
+                float(_get_attr("fthetaPolyA") or 0.0),
+                float(_get_attr("fthetaPolyB") or 0.0),
+                float(_get_attr("p0") or 0.0),
+                float(_get_attr("p1") or 0.0),
+                float(_get_attr("fthetaPolyC") or 0.0),
+            ]
         else:
-            focal_length = float(camera_prim.GetAttribute("focalLength").Get())
-            horizontal_aperture = float(camera_prim.GetAttribute("horizontalAperture").Get())
-            vertical_aperture = float(camera_prim.GetAttribute("verticalAperture").Get())
+            focal_length = float(_get_attr("focalLength"))
+            horizontal_aperture = float(_get_attr("horizontalAperture"))
+            vertical_aperture = float(_get_attr("verticalAperture"))
             fx = float(width) * focal_length / horizontal_aperture
             fy = float(height) * focal_length / vertical_aperture
             if not math.isclose(fx, fy, rel_tol=1e-9, abs_tol=1e-9):
@@ -1340,10 +1520,45 @@ class PegasusApp:
         distortion_coeffs = np.array(distortion, dtype=np.float64)
         return camera_matrix, distortion_coeffs
 
+    def _compute_camera_to_uav_transform(self, camera_path: str) -> tuple[np.ndarray, np.ndarray]:
+        stage = self.world.stage
+        camera_prim = stage.GetPrimAtPath(camera_path)
+        if not camera_prim or not camera_prim.IsValid():
+            raise RuntimeError(f"Camera prim '{camera_path}' does not exist")
+
+        translation_vehicle_camera_usd = np.zeros((3,), dtype=np.float64)
+        rotation_vehicle_camera_usd = np.eye(3, dtype=np.float64)
+
+        translate_attr = camera_prim.GetAttribute("xformOp:translate")
+        if translate_attr and translate_attr.IsValid():
+            try:
+                translation_vehicle_camera_usd = np.array(translate_attr.Get(), dtype=np.float64)
+            except Exception:
+                pass
+
+        orient_attr = camera_prim.GetAttribute("xformOp:orient")
+        if orient_attr and orient_attr.IsValid():
+            try:
+                quat = orient_attr.Get()
+                imag = quat.GetImaginary()
+                rotation_vehicle_camera_usd = Rotation.from_quat(
+                    [float(imag[0]), float(imag[1]), float(imag[2]), float(quat.GetReal())]
+                ).as_matrix()
+            except Exception:
+                pass
+
+        rotation_camera_usd_from_camera_cv = np.diag([1.0, -1.0, -1.0])
+        rotation_vehicle_camera_cv = rotation_vehicle_camera_usd @ rotation_camera_usd_from_camera_cv
+        rotation_camera_cv_vehicle = rotation_vehicle_camera_cv.T
+        translation_camera_cv_vehicle = -rotation_camera_cv_vehicle @ translation_vehicle_camera_usd
+        return rotation_camera_cv_vehicle.astype(np.float64), translation_camera_cv_vehicle.astype(np.float64)
+
     def _create_vision_system(self):
         if args_cli.disable_vision:
             self.vision_system = None
-            carb.log_warn("[transfer.app_px4] Vision system disabled.")
+            if not self._vision_disabled_logged:
+                carb.log_warn("[transfer.app_px4] Vision system disabled.")
+                self._vision_disabled_logged = True
             return
 
         camera_paths = self._find_drone_camera_prims()
@@ -1371,6 +1586,28 @@ class PegasusApp:
         width = max(int(args_cli.vision_render_width), 1)
         height = max(int(args_cli.vision_render_height), 1)
         camera_matrix, distortion_coeffs = self._get_camera_calibration(camera_path, width, height)
+        camera_to_uav_rotation, inferred_camera_to_uav_offset = self._compute_camera_to_uav_transform(camera_path)
+        if any(
+            abs(value) > 1.0e-9
+            for value in (
+                args_cli.vision_camera_offset_x,
+                args_cli.vision_camera_offset_y,
+                args_cli.vision_camera_offset_z,
+            )
+        ):
+            camera_to_uav_offset = (
+                float(args_cli.vision_camera_offset_x),
+                float(args_cli.vision_camera_offset_y),
+                float(args_cli.vision_camera_offset_z),
+            )
+        else:
+            camera_to_uav_offset = tuple(float(v) for v in inferred_camera_to_uav_offset.tolist())
+
+        carb.log_warn(
+            "[transfer.app_px4] Vision calibration "
+            f"camera_matrix={camera_matrix.tolist()} distortion={distortion_coeffs.tolist()} "
+            f"camera_to_uav_offset={list(camera_to_uav_offset)}"
+        )
         if args_cli.fractal_on and args_cli.headless:
             carb.log_warn("[transfer.app_px4] fractal_on requested, but the Fractal feed window is disabled in headless mode.")
         enable_overlay = (
@@ -1386,11 +1623,8 @@ class PegasusApp:
             fractal_config_path=str(fractal_config_path),
             camera_matrix=camera_matrix,
             distortion_coefficients=distortion_coeffs,
-            camera_to_uav_offset=(
-                args_cli.vision_camera_offset_x,
-                args_cli.vision_camera_offset_y,
-                args_cli.vision_camera_offset_z,
-            ),
+            camera_to_uav_offset=camera_to_uav_offset,
+            camera_to_uav_rotation_matrix=camera_to_uav_rotation,
             detector_fps=args_cli.vision_detector_camera_fps,
             resolution=(width, height),
             display_scale=args_cli.vision_display_scale,
@@ -1567,7 +1801,7 @@ class PegasusApp:
                 now_s = time.monotonic()
                 render_frame = not args_cli.headless
                 if self.vision_system is not None and self._vision_system_started:
-                    render_frame = render_frame or self.vision_system.needs_render(now_s)
+                    render_frame = True if args_cli.headless else (render_frame or self.vision_system.needs_render(now_s))
                 self.world.step(render=render_frame)
                 self._maybe_start_vision_system()
                 estimate = None
