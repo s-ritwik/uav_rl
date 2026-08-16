@@ -28,7 +28,7 @@ class VisionRuntimeConfig:
     fractal_config_file: str = "configuration_fractal_m7.yml"
     camparam_config_file: str = "CamParameters_gazebo_720p.yml"
     config_dir: str = ""
-    workspace_setup: str = "/home/rycker/projects/ros2_ws/install/setup.bash"
+    workspace_setup: str = str(Path.home() / "projects/ros2_ws/install/setup.bash")
     position_only_filter: bool = True
     visualize_detector_window: bool = False
     display_window_name: str = "Isaac Vision Feed"
