@@ -31,7 +31,14 @@ docker/.container.cfg
 .vscode/browse.vc.db*
 
 # Outputs
-/logs/
+/logs/*
+!/logs/rsl_rl/
+/logs/rsl_rl/*
+!/logs/rsl_rl/heave_landing_gru/
+/logs/rsl_rl/heave_landing_gru/*
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/
+/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/*
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14500.pt
 **/output/*
 **/outputs/*
 **/videos/*
@@ -53,6 +60,10 @@ _build
 # RL-Games
 **/runs/*
 **/logs/*
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14500.pt
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/
+!logs/rsl_rl/heave_landing_gru/
+!logs/rsl_rl/
 **/recordings/*
 
 # Pre-Trained Checkpoints
