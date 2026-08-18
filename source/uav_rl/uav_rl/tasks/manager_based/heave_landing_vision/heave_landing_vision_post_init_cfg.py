@@ -89,7 +89,7 @@ class HeaveLandingTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.25
+    max_touchdown_speed_mps: float = 0.45
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.20
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
