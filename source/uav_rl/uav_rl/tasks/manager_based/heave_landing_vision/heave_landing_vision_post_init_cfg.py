@@ -18,12 +18,14 @@ class HeaveLandingRewardWeightsCfg:
 
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
+    # mdp.vision_unavailable: penalize each step where the policy's vision-valid flag is false.
+    vision_unavailable: float = -5.0
     # mdp.failure_termination_penalty: scales failure penalty value 
     terminated: float = 50.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination 
     touchdown_terminated: float = 50.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
-    position_track: float = 1.0
+    position_track: float = 20.0
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
@@ -34,17 +36,17 @@ class HeaveLandingRewardWeightsCfg:
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.01
     # mdp.raw_action_component_l2: penalize large raw policy vx action.
-    action_magnitude_x: float = -2.5
+    action_magnitude_x: float = -0.5
     # mdp.raw_action_component_l2: penalize large raw policy vy action.
-    action_magnitude_y: float = -2.5
+    action_magnitude_y: float = -0.5
     # mdp.raw_action_component_l2: penalize large raw policy vz action.
     action_magnitude_z: float = -2.5
     # mdp.raw_action_component_l2: penalize large raw policy yaw-rate action.
     action_magnitude_yaw_rate: float = -1.2
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vx action.
-    velocity_action_rate_x: float = -40.0
+    velocity_action_rate_x: float = -5.0
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vy action.
-    velocity_action_rate_y: float = -40.0
+    velocity_action_rate_y: float = -5.0
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vz action.
     velocity_action_rate_z: float = -20.0
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
@@ -92,10 +94,10 @@ class HeaveLandingTouchdownCfg:
     max_touchdown_speed_mps: float = 0.45
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.20
-    # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
+    # A good touchdown must be both slow and inside the platform-center tolerance.
     require_xy_within_box: bool = True
-    # If True, good touchdown also requires roll/pitch/yaw to satisfy the attitude limits below.
-    require_attitude_within_limits: bool = True
+    # Attitude is monitored separately and becomes a hard gate after XY landing is reliable.
+    require_attitude_within_limits: bool = False
     # Good touchdown only if absolute roll at touchdown is within this limit.
     max_touchdown_roll_deg: float = 12.0
     # Good touchdown only if absolute pitch at touchdown is within this limit.
@@ -187,8 +189,8 @@ class HeaveLandingActionCommandLimitsCfg:
 class HeaveLandingResetPoseRangeCfg:
     """Robot reset pose ranges used by ``reset_root_state_uniform``."""
 
-    x: tuple[float, float] = (-1, 1)
-    y: tuple[float, float] = (-1, 1)
+    x: tuple[float, float] = (-.1, 0.1)
+    y: tuple[float, float] = (-0.1, 0.1)
     z: tuple[float, float] = (2.5, 4.0)
     roll: tuple[float, float] = (-0.2, 0.2)
     pitch: tuple[float, float] = (-0.15, 0.15)
@@ -209,11 +211,11 @@ class HeaveLandingResetPoseRangeCfg:
 class HeaveLandingResetVelocityRangeCfg:
     """Robot reset velocity ranges used by ``reset_root_state_uniform``."""
 
-    x: tuple[float, float] = (-0.2, 0.2)
-    y: tuple[float, float] = (-0.2, 0.2)
-    z: tuple[float, float] = (-0.2, 0.2)
-    roll: tuple[float, float] = (-0.2, 0.2)
-    pitch: tuple[float, float] = (-0.2, 0.2)
+    x: tuple[float, float] = (-0.1, 0.1)
+    y: tuple[float, float] = (-0.1, 0.1)
+    z: tuple[float, float] = (-0.1, 0.1)
+    roll: tuple[float, float] = (-0.1, 0.1)
+    pitch: tuple[float, float] = (-0.1, 0.1)
     yaw: tuple[float, float] = (-0.5, 0.5)
 
     def as_dict(self) -> dict[str, tuple[float, float]]:
@@ -454,6 +456,7 @@ class HeaveLandingVisionPostInitCfg:
         env_cfg.events.reset_root.params["velocity_range"] = self.reset_spawn.velocity_range.as_dict()
 
         env_cfg.rewards.alive.weight = self.reward_weights.alive
+        env_cfg.rewards.vision_unavailable.weight = self.reward_weights.vision_unavailable
         env_cfg.rewards.terminated.weight = self.reward_weights.terminated
         env_cfg.rewards.touchdown_terminated.weight = self.reward_weights.touchdown_terminated
         env_cfg.rewards.position_track.weight = self.reward_weights.position_track

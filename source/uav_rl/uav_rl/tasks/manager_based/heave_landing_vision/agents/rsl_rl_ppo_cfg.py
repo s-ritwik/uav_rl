@@ -69,7 +69,7 @@ class HeaveLandingVisionFfPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 class HeaveLandingVisionGruPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 48
     max_iterations = 4000
-    save_interval = 100
+    save_interval = 25
     experiment_name = "heave_landing_vision_gru"
     obs_groups = {"policy": ["policy"], "critic": ["critic"]}
     # Custom GRU additions:
