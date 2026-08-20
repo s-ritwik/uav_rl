@@ -36,17 +36,17 @@ class HeaveLandingRewardWeightsCfg:
     # mdp.vertical_speed_l2: penalize Z linear speed.
     vertical_speed: float = -0.01
     # mdp.raw_action_component_l2: penalize large raw policy vx action.
-    action_magnitude_x: float = -0.5
+    action_magnitude_x: float = -2.5
     # mdp.raw_action_component_l2: penalize large raw policy vy action.
-    action_magnitude_y: float = -0.5
+    action_magnitude_y: float = -2.5
     # mdp.raw_action_component_l2: penalize large raw policy vz action.
     action_magnitude_z: float = -2.5
     # mdp.raw_action_component_l2: penalize large raw policy yaw-rate action.
     action_magnitude_yaw_rate: float = -1.2
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vx action.
-    velocity_action_rate_x: float = -5.0
+    velocity_action_rate_x: float = -40.0
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vy action.
-    velocity_action_rate_y: float = -5.0
+    velocity_action_rate_y: float = -40.0
     # mdp.raw_action_rate_component_l2: continuity penalty on step-to-step change in raw policy vz action.
     velocity_action_rate_z: float = -20.0
     # mdp.uav_linear_acceleration_l2: penalize UAV body COM linear acceleration.
@@ -94,10 +94,10 @@ class HeaveLandingTouchdownCfg:
     max_touchdown_speed_mps: float = 0.45
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.20
-    # A good touchdown must be both slow and inside the platform-center tolerance.
+    # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
     require_xy_within_box: bool = True
-    # Attitude is monitored separately and becomes a hard gate after XY landing is reliable.
-    require_attitude_within_limits: bool = False
+    # If True, good touchdown also requires roll/pitch/yaw to satisfy the attitude limits below.
+    require_attitude_within_limits: bool = True
     # Good touchdown only if absolute roll at touchdown is within this limit.
     max_touchdown_roll_deg: float = 12.0
     # Good touchdown only if absolute pitch at touchdown is within this limit.

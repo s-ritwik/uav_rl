@@ -235,6 +235,7 @@ class RewardsCfg:
     """Reward terms for landing on the platform with a smooth touchdown."""
 
     alive = RewTerm(func=mdp.is_alive, weight=0.2)
+    vision_unavailable = RewTerm(func=mdp.vision_unavailable, weight=0.0)
     terminated = RewTerm(
         func=mdp.failure_termination_penalty,
         weight=1.0,

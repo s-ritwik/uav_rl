@@ -408,6 +408,7 @@ class _HeaveLandingRgbVisionState:
         self.filtered_rpy_deg = np.zeros((self.num_envs, 3), dtype=np.float64)
         self.markers_found = np.zeros((self.num_envs,), dtype=np.int32)
         self.age_fraction = np.ones((self.num_envs,), dtype=np.float64)
+        self._diagnostic_frame_saved = False
 
         dtype = robot.data.root_pos_w.dtype
         self.cached_rel_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=dtype)
@@ -420,6 +421,13 @@ class _HeaveLandingRgbVisionState:
         self.cached_raw_rel_quat[:, 0] = 1.0
         self.cached_raw_rpy_deg = torch.zeros((self.num_envs, 3), device=self.device, dtype=dtype)
         self.cached_filtered_rpy_deg = torch.zeros((self.num_envs, 3), device=self.device, dtype=dtype)
+        self.episode_sample_count = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
+        self.episode_available_count = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
+        self.episode_xy_error_direct_sum = torch.zeros((self.num_envs,), device=self.device, dtype=dtype)
+        self.episode_xy_error_flip_x_sum = torch.zeros((self.num_envs,), device=self.device, dtype=dtype)
+        self.episode_xy_error_flip_y_sum = torch.zeros((self.num_envs,), device=self.device, dtype=dtype)
+        self.episode_xy_error_flip_xy_sum = torch.zeros((self.num_envs,), device=self.device, dtype=dtype)
+        self.episode_xy_error_swap_xy_sum = torch.zeros((self.num_envs,), device=self.device, dtype=dtype)
 
     @staticmethod
     def _load_fractal_markers(path: Path) -> list[_MarkerDefinition]:
@@ -611,6 +619,37 @@ class _HeaveLandingRgbVisionState:
         self.filtered_rpy_deg[idx] = 0.0
         self.markers_found[idx] = 0
         self.age_fraction[idx] = 1.0
+        self.episode_sample_count[env_ids] = 0
+        self.episode_available_count[env_ids] = 0
+        self.episode_xy_error_direct_sum[env_ids] = 0.0
+        self.episode_xy_error_flip_x_sum[env_ids] = 0.0
+        self.episode_xy_error_flip_y_sum[env_ids] = 0.0
+        self.episode_xy_error_flip_xy_sum[env_ids] = 0.0
+        self.episode_xy_error_swap_xy_sum[env_ids] = 0.0
+
+    def accumulate_episode_alignment(self, env, filtered_valid: torch.Tensor, filtered_pos: torch.Tensor) -> None:
+        """Accumulate full-episode vision availability and XY frame-alignment diagnostics."""
+
+        self.episode_sample_count += 1
+        self.episode_available_count += filtered_valid.to(dtype=torch.long)
+        if not torch.any(filtered_valid):
+            return
+
+        robot = env.scene["robot"]
+        platform = env.scene["platform"]
+        true_xy = robot.data.root_pos_w[:, :2] - platform.data.root_pos_w[:, :2]
+        observed_xy = filtered_pos[:, :2].to(dtype=true_xy.dtype)
+        sign_flip_x = observed_xy.new_tensor([-1.0, 1.0])
+        sign_flip_y = observed_xy.new_tensor([1.0, -1.0])
+
+        def _accumulate(target: torch.Tensor, candidate: torch.Tensor) -> None:
+            target += torch.linalg.norm(candidate - true_xy, dim=1) * filtered_valid
+
+        _accumulate(self.episode_xy_error_direct_sum, observed_xy)
+        _accumulate(self.episode_xy_error_flip_x_sum, observed_xy * sign_flip_x)
+        _accumulate(self.episode_xy_error_flip_y_sum, observed_xy * sign_flip_y)
+        _accumulate(self.episode_xy_error_flip_xy_sum, -observed_xy)
+        _accumulate(self.episode_xy_error_swap_xy_sum, observed_xy[:, [1, 0]])
 
     def ensure_camera_transform(self, camera: TiledCamera) -> None:
         if self.camera_to_uav_rotation_matrix is not None and self.camera_to_uav_offset is not None:
@@ -879,6 +918,16 @@ class _HeaveLandingRgbVisionState:
         if should_process:
             rgb_batch = camera.data.output["rgb"].detach().cpu().numpy()
             intrinsic_batch = camera.data.intrinsic_matrices.detach().cpu().numpy()
+            if not self._diagnostic_frame_saved and self.num_envs > 0:
+                diagnostic_frame = np.asarray(rgb_batch[0])
+                if diagnostic_frame.dtype != np.uint8:
+                    diagnostic_frame = np.clip(diagnostic_frame, 0, 255).astype(np.uint8)
+                if diagnostic_frame.shape[-1] == 4:
+                    diagnostic_bgr = cv2.cvtColor(diagnostic_frame[:, :, :4], cv2.COLOR_RGBA2BGR)
+                else:
+                    diagnostic_bgr = cv2.cvtColor(diagnostic_frame[:, :, :3], cv2.COLOR_RGB2BGR)
+                cv2.imwrite("/tmp/heave_landing_vision_camera_env0.png", diagnostic_bgr)
+                self._diagnostic_frame_saved = True
             for env_index in range(self.num_envs):
                 self._process_env_frame(env_index, rgb_batch[env_index], intrinsic_batch[env_index], now_s, cfg)
 
@@ -898,6 +947,7 @@ class _HeaveLandingRgbVisionState:
             filtered_rpy_deg_t,
             age_fraction_t,
         ) = self._batched_filter.outputs(now_s, cfg)
+        self.accumulate_episode_alignment(env, filtered_valid_t, filtered_pos_t)
 
         self.filtered_valid = filtered_valid_t.detach().cpu().numpy()
         self.filtered_pos = filtered_pos_t.detach().cpu().numpy()

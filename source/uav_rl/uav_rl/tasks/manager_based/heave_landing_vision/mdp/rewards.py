@@ -17,9 +17,16 @@ from .landing_state import (
     touchdown_xy_error,
     update_touchdown_state,
 )
+from .observations import vision_available
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+def vision_unavailable(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """Return 1.0 while the policy's vision-availability flag is false."""
+
+    return 1.0 - vision_available(env).squeeze(-1)
 
 
 def failure_termination_penalty(
@@ -312,6 +319,21 @@ def touchdown_quality_metrics(
 ) -> dict[str, float]:
     """Return reset-time touchdown quality percentages for the environments being reset."""
 
+    vision_metric_defaults = {
+        "vision_available_rate": 0.0,
+        "vision_xy_error_direct": 0.0,
+        "vision_xy_error_flip_x": 0.0,
+        "vision_xy_error_flip_y": 0.0,
+        "vision_xy_error_flip_xy": 0.0,
+        "vision_xy_error_swap_xy": 0.0,
+        "episode_vision_available_fraction": 0.0,
+        "episode_vision_xy_error_direct": 0.0,
+        "episode_vision_xy_error_flip_x": 0.0,
+        "episode_vision_xy_error_flip_y": 0.0,
+        "episode_vision_xy_error_flip_xy": 0.0,
+        "episode_vision_xy_error_swap_xy": 0.0,
+    }
+
     if env_ids is None:
         env_ids_tensor = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
     elif isinstance(env_ids, slice):
@@ -328,6 +350,12 @@ def touchdown_quality_metrics(
             "bad_touchdown_rate": 0.0,
             "good_touchdown_pct": 0.0,
             "bad_touchdown_pct": 0.0,
+            "speed_ok_pct": 0.0,
+            "xy_ok_pct": 0.0,
+            "attitude_ok_pct": 0.0,
+            "mean_touchdown_descent_speed": 0.0,
+            "mean_touchdown_xy_error": 0.0,
+            **vision_metric_defaults,
         }
 
     touched = touchdown_flag(env)[env_ids_tensor]
@@ -362,6 +390,66 @@ def touchdown_quality_metrics(
 
     good_touchdown_pct = float(good.sum().item() / touchdown_den) if touchdown_den > 0.0 else 0.0
     bad_touchdown_pct = float(bad.sum().item() / touchdown_den) if touchdown_den > 0.0 else 0.0
+    speed_ok_pct = float((touched & speed_ok).sum().item() / touchdown_den) if touchdown_den > 0.0 else 0.0
+    xy_ok_pct = (
+        float((touched & (xy_error <= float(max_xy_error_m))).sum().item() / touchdown_den)
+        if touchdown_den > 0.0
+        else 0.0
+    )
+    attitude_ok_pct = (
+        float((touched & roll_ok & pitch_ok & yaw_ok).sum().item() / touchdown_den)
+        if touchdown_den > 0.0
+        else 0.0
+    )
+    mean_touchdown_descent_speed = float(descent_speed[touched].mean().item()) if touchdown_den > 0.0 else 0.0
+    mean_touchdown_xy_error = float(xy_error[touched].mean().item()) if touchdown_den > 0.0 else 0.0
+
+    vision_metrics = vision_metric_defaults
+    vision_state = getattr(env, "_heave_landing_rgb_vision_state", None)
+    if vision_state is not None:
+        vision_xy = vision_state.cached_rel_pos[env_ids_tensor, :2]
+        vision_available = vision_state.cached_status[env_ids_tensor, 1] > 0.5
+        vision_metrics = dict(vision_metric_defaults)
+        vision_metrics["vision_available_rate"] = float(vision_available.float().mean().item())
+        if torch.any(vision_available):
+            asset: RigidObject = env.scene["robot"]
+            reference_asset: RigidObject = env.scene["platform"]
+            true_xy = (
+                asset.data.root_pos_w[env_ids_tensor, :2] - reference_asset.data.root_pos_w[env_ids_tensor, :2]
+            )[vision_available]
+            observed_xy = vision_xy[vision_available]
+
+            def _mean_alignment_error(candidate_xy: torch.Tensor) -> float:
+                return float(torch.linalg.norm(candidate_xy - true_xy, dim=1).mean().item())
+
+            vision_metrics["vision_xy_error_direct"] = _mean_alignment_error(observed_xy)
+            vision_metrics["vision_xy_error_flip_x"] = _mean_alignment_error(
+                observed_xy * observed_xy.new_tensor([-1.0, 1.0])
+            )
+            vision_metrics["vision_xy_error_flip_y"] = _mean_alignment_error(
+                observed_xy * observed_xy.new_tensor([1.0, -1.0])
+            )
+            vision_metrics["vision_xy_error_flip_xy"] = _mean_alignment_error(-observed_xy)
+            vision_metrics["vision_xy_error_swap_xy"] = _mean_alignment_error(observed_xy[:, [1, 0]])
+
+        episode_samples = vision_state.episode_sample_count[env_ids_tensor].sum()
+        episode_available = vision_state.episode_available_count[env_ids_tensor].sum()
+        if int(episode_samples.item()) > 0:
+            vision_metrics["episode_vision_available_fraction"] = float(
+                episode_available.item() / episode_samples.item()
+            )
+        if int(episode_available.item()) > 0:
+            available_den = float(episode_available.item())
+            episode_error_fields = {
+                "episode_vision_xy_error_direct": "episode_xy_error_direct_sum",
+                "episode_vision_xy_error_flip_x": "episode_xy_error_flip_x_sum",
+                "episode_vision_xy_error_flip_y": "episode_xy_error_flip_y_sum",
+                "episode_vision_xy_error_flip_xy": "episode_xy_error_flip_xy_sum",
+                "episode_vision_xy_error_swap_xy": "episode_xy_error_swap_xy_sum",
+            }
+            for metric_name, state_name in episode_error_fields.items():
+                error_sum = getattr(vision_state, state_name)[env_ids_tensor].sum()
+                vision_metrics[metric_name] = float(error_sum.item() / available_den)
 
     return {
         "touchdown_rate": float(touchdown_count.item() / reset_den),
@@ -369,6 +457,12 @@ def touchdown_quality_metrics(
         "bad_touchdown_rate": float(bad.sum().item() / reset_den),
         "good_touchdown_pct": good_touchdown_pct,
         "bad_touchdown_pct": bad_touchdown_pct,
+        "speed_ok_pct": speed_ok_pct,
+        "xy_ok_pct": xy_ok_pct,
+        "attitude_ok_pct": attitude_ok_pct,
+        "mean_touchdown_descent_speed": mean_touchdown_descent_speed,
+        "mean_touchdown_xy_error": mean_touchdown_xy_error,
+        **vision_metrics,
     }
 
 
