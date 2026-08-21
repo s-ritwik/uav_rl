@@ -36,9 +36,22 @@ docker/.container.cfg
 /logs/rsl_rl/*
 !/logs/rsl_rl/heave_landing_gru/
 /logs/rsl_rl/heave_landing_gru/*
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/
+/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/*
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/model_9900.pt
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/model_9999.pt
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/events.out.tfevents.1784474452.rycker-heli.155505.0
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/params/
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/params/agent.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/params/env.yaml
 !/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/
 /logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/*
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14400.pt
 !/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14500.pt
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/events.out.tfevents.1784519813.rycker-heli.331691.0
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/agent.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/env.yaml
 **/output/*
 **/outputs/*
 **/videos/*
@@ -60,10 +73,22 @@ _build
 # RL-Games
 **/runs/*
 **/logs/*
-!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14500.pt
-!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/
-!logs/rsl_rl/heave_landing_gru/
 !logs/rsl_rl/
+!logs/rsl_rl/heave_landing_gru/
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/model_9900.pt
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/model_9999.pt
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/events.out.tfevents.1784474452.rycker-heli.155505.0
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/params/
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/params/agent.yaml
+!logs/rsl_rl/heave_landing_gru/2026-07-19_20-50-48_heave_gru_5.0.0/params/env.yaml
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14400.pt
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/model_14500.pt
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/events.out.tfevents.1784519813.rycker-heli.331691.0
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/agent.yaml
+!logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/env.yaml
 **/recordings/*
 
 # Pre-Trained Checkpoints
