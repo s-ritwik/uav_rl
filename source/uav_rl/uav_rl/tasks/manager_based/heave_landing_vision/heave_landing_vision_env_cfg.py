@@ -129,7 +129,6 @@ class ObservationsCfg:
         vision_rel_quat = ObsTerm(func=mdp.vision_rel_quat)
         projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
         last_action = ObsTerm(func=mdp.last_action)
-        vision_available = ObsTerm(func=mdp.vision_available)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -139,16 +138,11 @@ class ObservationsCfg:
     class CriticCfg(ObsGroup):
         """Critic observations with privileged simulator state and future heave information."""
 
-        vision_rel_pos = ObsTerm(func=mdp.vision_rel_pos)
-        vision_rel_lin_vel = ObsTerm(func=mdp.vision_rel_lin_vel)
-        vision_rel_quat = ObsTerm(func=mdp.vision_rel_quat)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
-        last_action = ObsTerm(func=mdp.last_action)
-        vision_available = ObsTerm(func=mdp.vision_available)
-
         true_root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
         true_root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
         true_root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
+        last_action = ObsTerm(func=mdp.last_action)
 
         future_platform_pos_z_w = ObsTerm(
             func=mdp.future_platform_pos_z_w,

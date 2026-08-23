@@ -53,7 +53,7 @@ class HeaveLandingFfPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=5e-3,
+        entropy_coef=1e-2,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-6,
@@ -68,7 +68,7 @@ class HeaveLandingFfPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 @configclass
 class HeaveLandingGruPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 48
-    max_iterations = 4000
+    max_iterations = 10000
     save_interval = 100
     experiment_name = "heave_landing_gru"
     obs_groups = {"policy": ["policy"], "critic": ["critic"]}
@@ -96,14 +96,14 @@ class HeaveLandingGruPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=5e-3,
+        entropy_coef=5e-4,
         num_learning_epochs=5,
         num_mini_batches=6,
         learning_rate=5.0e-7,
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=5e-3,
+        desired_kl=1e-3,
         max_grad_norm=1.0,
     )
 

@@ -117,7 +117,6 @@ class ObservationsCfg:
         root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
         root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
         root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
-        root_ang_vel_rel = ObsTerm(func=mdp.root_ang_vel_rel)
         projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
         last_action = ObsTerm(func=mdp.last_action)
 
@@ -132,7 +131,6 @@ class ObservationsCfg:
         root_pos_rel = ObsTerm(func=mdp.root_pos_rel)
         root_lin_vel_rel = ObsTerm(func=mdp.root_lin_vel_rel)
         root_quat_rel = ObsTerm(func=mdp.root_quat_rel)
-        root_ang_vel_rel = ObsTerm(func=mdp.root_ang_vel_rel)
         projected_gravity = ObsTerm(func=mdp.projected_gravity_noisy)
         last_action = ObsTerm(func=mdp.last_action)
 

@@ -19,13 +19,13 @@ class HeaveLandingRewardWeightsCfg:
     # mdp.is_alive: +ve reward each non-terminal step.
     alive: float = 0.2
     # mdp.vision_unavailable: penalize each step where the policy's vision-valid flag is false.
-    vision_unavailable: float = -5.0
+    vision_unavailable: float = 0.0
     # mdp.failure_termination_penalty: scales failure penalty value 
     terminated: float = 50.0
     # mdp.touchdown_termination_reward: optional extra reward on touchdown termination 
     touchdown_terminated: float = 50.0
     # mdp.horizontal_position_error_tanh wrt platform-frame target XY [0, 0].
-    position_track: float = 20.0
+    position_track: float = 1.0
     # mdp.vertical_position_error_l1: |rel_z - target_height| term.
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
@@ -91,7 +91,7 @@ class HeaveLandingTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.45
+    max_touchdown_speed_mps: float = 0.25
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.20
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
