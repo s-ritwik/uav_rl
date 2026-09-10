@@ -28,7 +28,7 @@ class HeaveLandingRewardWeightsCfg:
     vertical_position: float = 0.0
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
     # pushes agent to land
-    vertical_clearance_excess: float = 0.0
+    vertical_clearance_excess: float = -1.0
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
