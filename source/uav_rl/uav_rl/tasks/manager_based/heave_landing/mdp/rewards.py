@@ -133,6 +133,88 @@ def speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCf
     return torch.sum(torch.square(asset.data.root_lin_vel_w), dim=1)
 
 
+def cbf_braking_envelope_loss(
+    clearance: torch.Tensor,
+    relative_vz: torch.Tensor,
+    braking_acceleration_mps2: float,
+    landing_speed_mps: float,
+    deficit_scale_m: float,
+    max_loss: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Nonnegative Huber-style loss outside the admissible braking envelope.
+
+    Clearance is measured above physical contact; relative_vz is UAV minus deck.
+    Safe states receive zero, regardless of how large their safety margin is.
+    """
+    if (
+        braking_acceleration_mps2 <= 0
+        or deficit_scale_m <= 0
+        or landing_speed_mps < 0
+        or (max_loss is not None and max_loss <= 0)
+    ):
+        raise ValueError("CBF braking acceleration/scale must be positive and landing speed nonnegative.")
+    closing_speed = (-relative_vz).clamp_min(0.0)
+    stopping_distance = (
+        (closing_speed.square() - landing_speed_mps**2) / (2.0 * braking_acceleration_mps2)
+    ).clamp_min(0.0)
+    h = clearance - stopping_distance
+    deficit = (-h).clamp_min(0.0) / deficit_scale_m
+    loss = torch.where(deficit <= 1.0, deficit.square(), 2.0 * deficit - 1.0)
+    if max_loss is not None:
+        loss = loss.clamp_max(float(max_loss))
+    return loss, h
+
+
+def cbf_braking_envelope_penalty(
+    env: "ManagerBasedRLEnv",
+    braking_acceleration_mps2: float = 0.7,
+    landing_speed_mps: float = 0.25,
+    deficit_scale_m: float = 0.25,
+    max_loss: float = 4.0,
+    contact_root_offset_m: float = 0.265,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
+) -> torch.Tensor:
+    """CBF-derived soft penalty, not a hard safety filter. Use a negative weight.
+
+    The offset includes both deck half-thickness and UAV root-to-foot distance.
+    Read exact simulator states, not noisy observation functions. At first contact
+    use the preceding policy-step margin, so collision braking cannot hide impact
+    speed. The existing touchdown reward separately grades the terminal outcome.
+    RewardManager applies dt; do not multiply by dt here.
+    """
+    asset = env.scene[asset_cfg.name]
+    platform = env.scene[reference_asset_cfg.name]
+    clearance = asset.data.root_pos_w[:, 2] - platform.data.root_pos_w[:, 2] - contact_root_offset_m
+    relative_vz = asset.data.root_lin_vel_w[:, 2] - platform.data.root_lin_vel_w[:, 2]
+    loss, h = cbf_braking_envelope_loss(
+        clearance, relative_vz, braking_acceleration_mps2, landing_speed_mps, deficit_scale_m, max_loss
+    )
+    if not hasattr(env, "_cbf_previous_loss"):
+        env._cbf_previous_loss = torch.zeros_like(loss)
+        env._cbf_previous_h = torch.zeros_like(h)
+        env._cbf_previous_valid = torch.zeros_like(loss, dtype=torch.bool)
+    valid = env._cbf_previous_valid & (env.episode_length_buf > 1)
+    contact = env.termination_manager.get_term("touchdown").bool()
+    loss = torch.where(contact, torch.where(valid, env._cbf_previous_loss, 0.0), loss)
+    h = torch.where(contact, torch.where(valid, env._cbf_previous_h, 0.0), h)
+    env._cbf_previous_loss.copy_(loss)
+    env._cbf_previous_h.copy_(h)
+    env._cbf_previous_valid[:] = ~env.reset_buf
+    env._cbf_metrics = {
+        "violation_fraction": (h < 0.0).float().mean(),
+        "mean_deficit_m": (-h).clamp_min(0.0).mean(),
+        "mean_h_m": h.mean(),
+        "mean_loss": loss.mean(),
+    }
+    return loss
+
+
+def cbf_braking_metrics(env: "ManagerBasedRLEnv", env_ids=None) -> dict[str, torch.Tensor]:
+    """Log current vectorized CBF statistics through the reset-safe curriculum path."""
+    return getattr(env, "_cbf_metrics", {})
+
+
 def horizontal_speed_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Penalize horizontal (x,y) linear speed for hover-in-place behavior."""
     asset: RigidObject = env.scene[asset_cfg.name]

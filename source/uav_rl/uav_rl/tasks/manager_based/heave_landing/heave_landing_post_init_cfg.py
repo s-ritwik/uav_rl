@@ -29,6 +29,8 @@ class HeaveLandingRewardWeightsCfg:
     # mdp.vertical_clearance_excess_l1: linear penalty for clearance above threshold. 
     # pushes agent to land
     vertical_clearance_excess: float = -1.0
+    # Zero within the CBF braking envelope; negative outside it.
+    cbf_braking_envelope: float = -1.0
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
@@ -67,6 +69,19 @@ class HeaveLandingRewardWeightsCfg:
     horizontal_velocity_match: float = 0.0
     # mdp.near_target_action_xy_l2: penalize large raw xy action when already near the platform center.
     near_target_action_xy: float = 0.0
+
+
+@configclass
+class HeaveLandingCbfCfg:
+    """CBF reward parameters; contact offset is geometry, not a reward tuning knob."""
+
+    braking_acceleration_mps2: float = 0.7
+    landing_speed_mps: float = 0.25
+    deficit_scale_m: float = 0.25
+    # Bound the dense signal so an early unsafe descent cannot dominate PPO updates.
+    max_loss: float = 4.0
+    # Upright iris_legs.usd collision minimum (-0.165) plus deck half-height (0.10).
+    contact_root_offset_m: float = 0.265
 
 
 @configclass
@@ -346,6 +361,7 @@ class HeaveLandingPostInitCfg:
     action_command_limits: HeaveLandingActionCommandLimitsCfg = HeaveLandingActionCommandLimitsCfg()
     reset_spawn: HeaveLandingResetSpawnCfg = HeaveLandingResetSpawnCfg()
     reward_weights: HeaveLandingRewardWeightsCfg = HeaveLandingRewardWeightsCfg()
+    cbf: HeaveLandingCbfCfg = HeaveLandingCbfCfg()
     position_track: HeaveLandingPositionTrackCfg = HeaveLandingPositionTrackCfg()
     near_target_action: HeaveLandingNearTargetActionCfg = HeaveLandingNearTargetActionCfg()
     vertical_clearance: HeaveLandingVerticalClearanceCfg = HeaveLandingVerticalClearanceCfg()
@@ -422,6 +438,14 @@ class HeaveLandingPostInitCfg:
         env_cfg.rewards.position_track.params["std"] = float(self.position_track.std_m)
         env_cfg.rewards.vertical_position.weight = self.reward_weights.vertical_position
         env_cfg.rewards.vertical_clearance_excess.weight = self.reward_weights.vertical_clearance_excess
+        env_cfg.rewards.cbf_braking_envelope.weight = self.reward_weights.cbf_braking_envelope
+        env_cfg.rewards.cbf_braking_envelope.params.update(
+            braking_acceleration_mps2=float(self.cbf.braking_acceleration_mps2),
+            landing_speed_mps=float(self.cbf.landing_speed_mps),
+            deficit_scale_m=float(self.cbf.deficit_scale_m),
+            max_loss=float(self.cbf.max_loss),
+            contact_root_offset_m=float(self.cbf.contact_root_offset_m),
+        )
         env_cfg.rewards.horizontal_speed.weight = self.reward_weights.horizontal_speed
         env_cfg.rewards.vertical_speed.weight = self.reward_weights.vertical_speed
         env_cfg.rewards.action_magnitude_x.weight = self.reward_weights.action_magnitude_x

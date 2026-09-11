@@ -266,6 +266,18 @@ class RewardsCfg:
         },
     )
 
+    cbf_braking_envelope = RewTerm(
+        func=mdp.cbf_braking_envelope_penalty,
+        weight=-2.0,
+        params={
+            "braking_acceleration_mps2": 0.7,
+            "landing_speed_mps": 0.25,
+            "deficit_scale_m": 0.25,
+            "max_loss": 4.0,
+            "contact_root_offset_m": 0.265,
+        },
+    )
+
     # Stabilize around the hover setpoint.
     horizontal_speed = RewTerm(func=mdp.horizontal_speed_l2, weight=-0.08)
     vertical_speed = RewTerm(func=mdp.vertical_speed_l2, weight=-0.08)
@@ -373,6 +385,8 @@ class TerminationsCfg:
 @configclass
 class CurriculumCfg:
     """Logging-only curriculum terms used to surface episode metrics."""
+
+    cbf_metrics = CurrTerm(func=mdp.cbf_braking_metrics)
 
     touchdown_quality_metrics = CurrTerm(
         func=mdp.touchdown_quality_metrics,
