@@ -52,6 +52,16 @@ docker/.container.cfg
 !/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/
 !/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/agent.yaml
 !/logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/env.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/
+/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/*
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/model_5700.pt
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/events.out.tfevents.1789120669.rycker-heli.91915.0
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/params/
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/params/agent.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/params/env.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.onnx
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.pt
 **/output/*
 **/outputs/*
 **/videos/*
@@ -89,6 +99,16 @@ _build
 !logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/
 !logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/agent.yaml
 !logs/rsl_rl/heave_landing_gru/2026-07-20_09-26-48_heave_gru_5.0.1/params/env.yaml
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/
+logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/*
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/model_5700.pt
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/events.out.tfevents.1789120669.rycker-heli.91915.0
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/params/
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/params/agent.yaml
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/params/env.yaml
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.onnx
+!logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.pt
 **/recordings/*
 
 # Pre-Trained Checkpoints
