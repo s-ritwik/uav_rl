@@ -30,7 +30,7 @@ class HeaveLandingRewardWeightsCfg:
     # pushes agent to land
     vertical_clearance_excess: float = -1.0
     # Zero within the CBF braking envelope; negative outside it.
-    cbf_braking_envelope: float = -1.0
+    cbf_braking_envelope: float = -5.0
     # mdp.horizontal_speed_l2: penalize XY linear speed.
     horizontal_speed: float = -0.08
     # mdp.vertical_speed_l2: penalize Z linear speed.
