@@ -131,6 +131,15 @@ tests/
 !/logs/rsl_rl/
 !/logs/rsl_rl/heave_landing_gru/
 
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/
+/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/*
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/model_2500.pt
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/model_2600.pt
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/events.out.tfevents.1789140784.vidura.7825.0
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/params/
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/params/agent.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_21-02-55_9.0.0_cbf/params/env.yaml
+
 !/logs/rsl_rl/heave_landing_gru/2026-09-11_23-14-41_9.0.1_cbf/
 /logs/rsl_rl/heave_landing_gru/2026-09-11_23-14-41_9.0.1_cbf/*
 !/logs/rsl_rl/heave_landing_gru/2026-09-11_23-14-41_9.0.1_cbf/model_6200.pt
