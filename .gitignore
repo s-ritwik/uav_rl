@@ -62,6 +62,13 @@ docker/.container.cfg
 !/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/
 !/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.onnx
 !/logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.pt
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/
+/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/*
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/model_4000.pt
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/events.out.tfevents.1789102661.rycker-heli.45562.0
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/params/
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/params/agent.yaml
+!/logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/params/env.yaml
 **/output/*
 **/outputs/*
 **/videos/*
@@ -109,6 +116,13 @@ logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/*
 !logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/
 !logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.onnx
 !logs/rsl_rl/heave_landing_gru/2026-09-11_15-27-45_8.0.1/exported/policy.pt
+!logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/
+logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/*
+!logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/model_4000.pt
+!logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/events.out.tfevents.1789102661.rycker-heli.45562.0
+!logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/params/
+!logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/params/agent.yaml
+!logs/rsl_rl/heave_landing_gru/2026-09-11_10-27-37_8.0.0/params/env.yaml
 **/recordings/*
 
 # Pre-Trained Checkpoints
