@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 import math
 from typing import TYPE_CHECKING
 
@@ -69,7 +71,7 @@ def _relative_position(
 ) -> torch.Tensor:
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
-    return asset.data.root_pos_w - reference_asset.data.root_pos_w
+    return asset.data.root_pos_w - platform_reference_data(env, reference_asset_cfg.name).root_pos_w
 
 
 def position_error_l2(
@@ -121,8 +123,8 @@ def vertical_clearance_excess_l1(
 
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
-    rel_pos_w = asset.data.root_pos_w - reference_asset.data.root_pos_w
-    z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.053))
+    rel_pos_w = asset.data.root_pos_w - platform_reference_data(env, reference_asset_cfg.name).root_pos_w
+    z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.165))
     z_clearance = rel_pos_w[:, 2] - z0_m
     return torch.clamp(z_clearance - float(clearance_threshold_m), min=0.0)
 
@@ -148,7 +150,7 @@ def horizontal_velocity_error_tanh(
     """Positive XY relative-velocity tracking reward in [0, 1], larger when closer to target."""
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
-    rel_vel_xy = asset.data.root_lin_vel_w[:, :2] - reference_asset.data.root_lin_vel_w[:, :2]
+    rel_vel_xy = asset.data.root_lin_vel_w[:, :2] - platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w[:, :2]
     target = _target_tensor(env, target_rel_xy, rel_vel_xy.dtype)
     distance_xy = torch.linalg.norm(rel_vel_xy - target, dim=1)
     return 1.0 - torch.tanh(distance_xy / max(std, 1.0e-3))

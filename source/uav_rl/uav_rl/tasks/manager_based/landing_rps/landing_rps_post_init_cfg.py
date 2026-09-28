@@ -310,7 +310,7 @@ class LandingRpsPostInitCfg:
     termination_penalty: LandingRpsTerminationPenaltyCfg = LandingRpsTerminationPenaltyCfg()
     termination_thresholds: LandingRpsTerminationThresholdsCfg = LandingRpsTerminationThresholdsCfg()
     platform_motion: LandingRpsPlatformMotionCfg = LandingRpsPlatformMotionCfg()
-    vehicle_z0_m: float = 0.15 
+    vehicle_z0_m: float = 0.165
 
     domain_randomization: mdp.LandingRpsDomainRandomizationCfg = mdp.LandingRpsDomainRandomizationCfg(
         # Flag for overall DR enable/disable

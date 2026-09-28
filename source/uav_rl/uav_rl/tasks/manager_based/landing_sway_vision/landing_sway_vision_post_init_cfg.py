@@ -311,6 +311,7 @@ class LandingSwayVisionObservationCfg:
     camera_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     # 180 deg about body-x: optical axis points downward relative to the default body frame.
     camera_quat_body_wxyz: tuple[float, float, float, float] = (0.0, 1.0, 0.0, 0.0)
+    # Legacy serialized fields only; the authored PNG geometry now defines this pose.
     marker_offset_platform_m: tuple[float, float, float] = (0.0, 0.0, 0.1)
     marker_quat_platform_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     marker_size_m: float = 0.70
@@ -367,7 +368,7 @@ class LandingSwayVisionPostInitCfg:
     termination_thresholds: LandingSwayTerminationThresholdsCfg = LandingSwayTerminationThresholdsCfg()
     platform_motion: LandingSwayPlatformMotionCfg = LandingSwayPlatformMotionCfg()
     vision_observation: LandingSwayVisionObservationCfg = LandingSwayVisionObservationCfg()
-    vehicle_z0_m: float = 0.15
+    vehicle_z0_m: float = 0.165
 
     domain_randomization: mdp.LandingSwayDomainRandomizationCfg = mdp.LandingSwayDomainRandomizationCfg(
         # Flag for overall DR enable/disable

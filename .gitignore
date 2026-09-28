@@ -205,3 +205,9 @@ tests/
 !/logs/rsl_rl/heave_landing_gru/2026-09-16_20-12-13_9.0.0_cbf_no_future_resume5200/params/
 !/logs/rsl_rl/heave_landing_gru/2026-09-16_20-12-13_9.0.0_cbf_no_future_resume5200/params/agent.yaml
 !/logs/rsl_rl/heave_landing_gru/2026-09-16_20-12-13_9.0.0_cbf_no_future_resume5200/params/env.yaml
+
+# Local analysis / evaluation scripts (untracked by design)
+/analysis/
+
+# Local design notes (untracked by design)
+/CUTOFF_TRAINING_PLAN.md

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 import math
 
 import torch
@@ -280,22 +282,17 @@ def _update_vision_cache(env) -> _VisionObservationState:
     camera_quat_b = math_utils.normalize(
         _expand_vector(vision_cfg.camera_quat_body_wxyz, num_envs, device, dtype)
     )
-    marker_offset_p = _expand_vector(vision_cfg.marker_offset_platform_m, num_envs, device, dtype)
-    marker_quat_p = math_utils.normalize(
-        _expand_vector(vision_cfg.marker_quat_platform_wxyz, num_envs, device, dtype)
-    )
 
     robot_pos_w = robot.data.root_pos_w
     robot_quat_w = math_utils.quat_unique(robot.data.root_quat_w)
-    platform_pos_w = platform.data.root_pos_w
-    platform_quat_w = math_utils.quat_unique(platform.data.root_quat_w)
+    marker = platform_reference_data(env)
+    platform_pos_w = marker.root_pos_w
+    platform_quat_w = math_utils.quat_unique(marker.root_quat_w)
 
     camera_pos_w, camera_quat_w = math_utils.combine_frame_transforms(
         robot_pos_w, robot_quat_w, camera_offset_b, camera_quat_b
     )
-    marker_pos_w, marker_quat_w = math_utils.combine_frame_transforms(
-        platform_pos_w, platform_quat_w, marker_offset_p, marker_quat_p
-    )
+    marker_pos_w, marker_quat_w = platform_pos_w, platform_quat_w
 
     t_marker_cam, q_marker_cam = math_utils.subtract_frame_transforms(
         camera_pos_w, camera_quat_w, marker_pos_w, marker_quat_w
@@ -477,6 +474,7 @@ def _update_vision_cache(env) -> _VisionObservationState:
         _identity_quat(num_envs, device, dtype=dtype),
     )
 
+    filtered_pos_output[:, 2] -= float(env.cfg.post_init_cfg.vehicle_z0_m)
     state.cached_rel_pos = torch.where(
         state.filtered_valid.unsqueeze(-1), filtered_pos_output, torch.zeros_like(filtered_pos_output)
     )

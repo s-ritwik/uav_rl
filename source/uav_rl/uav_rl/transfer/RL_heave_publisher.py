@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vehicle-z0-m",
         type=float,
-        default=0.15,
+        default=0.165,
         help="CG-to-landing-gear/root offset subtracted from relative z, matching heave_landing observations.",
     )
     parser.add_argument("--velocity-limit-x", type=float, default=None, help="Deprecated symmetric |vx| limit.")
@@ -164,9 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="If 1, trigger disarm when relative |x|,|y|,|z| are below thresholds.",
     )
-    parser.add_argument("--disarm-rel-x-threshold", type=float, default=0.15)
-    parser.add_argument("--disarm-rel-y-threshold", type=float, default=0.15)
-    parser.add_argument("--disarm-rel-z-threshold", type=float, default=0.15)
+    parser.add_argument("--disarm-rel-x-threshold", type=float, default=0.10)
+    parser.add_argument("--disarm-rel-y-threshold", type=float, default=0.10)
+    parser.add_argument("--disarm-rel-z-threshold", type=float, default=0.07)
     parser.add_argument("--disarm-via-service", type=int, default=1)
     parser.add_argument("--mavros-ns", type=str, default="/mavros")
     parser.add_argument("--disarm-service-timeout", type=float, default=0.25)

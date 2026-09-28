@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
@@ -405,7 +407,7 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         horizon_s: float = 6.0,
         sample_rate_hz: float | None = None,
     ) -> torch.Tensor:
-        """Return future platform world-frame z samples for the next horizon in seconds."""
+        """Return future PNG-center world z; physical motion remains body-centered."""
         env_ids_tensor = self._resolve_env_ids(env_ids)
         if env_ids_tensor.numel() == 0:
             return torch.zeros((0, 0), device=self.device)
@@ -422,7 +424,10 @@ class CSVHeavePlatformMotion(ManagerTermBase):
         default_root_state = self.platform.data.default_root_state[env_ids_tensor]
         base_world_z = default_root_state[:, 2] + self._env.scene.env_origins[env_ids_tensor, 2]
         sampled_bias = self._bias_m[env_ids_tensor].to(dtype=future_heave.dtype)
-        return base_world_z[:, None] + sampled_bias[:, None] + future_heave
+        # Heave keeps orientation fixed, so the body-to-PNG world offset is constant.
+        marker_z = platform_reference_data(self._env, self.asset_cfg.name).root_pos_w[:, 2]
+        marker_dz = (marker_z - self.platform.data.root_pos_w[:, 2])[env_ids_tensor]
+        return (base_world_z + sampled_bias + marker_dz)[:, None] + future_heave
 
     def _sample_future_trace(
         self,

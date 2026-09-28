@@ -145,7 +145,7 @@ class ObservationsCfg:
         cbf_h0_features = ObsTerm(
             func=mdp.heave_cbf_features,
             params={
-                "d_min_m": 0.156,
+                "d_min_m": 0.165,
                 "landing_velocity_mps": -0.2,
                 "a_rel_mps2": 0.7,
                 "eps": 1.0e-4,
@@ -279,7 +279,7 @@ class RewardsCfg:
         func=mdp.heave_cbf_h0_signed,
         weight=1.0,
         params={
-            "d_min_m": 0.156,
+            "d_min_m": 0.165,
             "landing_velocity_mps": -0.2,
             "a_rel_mps2": 0.7,
             "eps": 1.0e-4,
@@ -391,7 +391,7 @@ class TerminationsCfg:
         func=mdp.heave_cbf_h0_negative,
         params={
             "enabled": True,
-            "d_min_m": 0.156,
+            "d_min_m": 0.165,
             "landing_velocity_mps": -0.2,
             "a_rel_mps2": 0.7,
             "eps": 1.0e-4,
@@ -425,7 +425,7 @@ class CurriculumCfg:
         func=mdp.heave_cbf_h0_metrics,
         params={
             "margin_m": 0.2,
-            "d_min_m": 0.156,
+            "d_min_m": 0.165,
             "gamma": 4.0,
             "landing_velocity_mps": -0.2,
             "a_rel_mps2": 0.7,

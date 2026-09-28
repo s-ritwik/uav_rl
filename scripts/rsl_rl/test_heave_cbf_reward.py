@@ -14,7 +14,13 @@ import torch
 SOURCE = Path(__file__).resolve().parents[2] / "source/uav_rl/uav_rl/tasks/manager_based/heave_landing/mdp/rewards.py"
 NAMES = {"cbf_braking_envelope_loss", "cbf_braking_envelope_penalty", "cbf_braking_metrics"}
 tree = ast.parse(SOURCE.read_text())
-scope = {"torch": torch, "SceneEntityCfg": lambda name: SimpleNamespace(name=name)}
+scope = {
+    "torch": torch,
+    "SceneEntityCfg": lambda name: SimpleNamespace(name=name),
+    # Fixtures below provide marker-referenced state, not physical body-center state.
+    "platform_reference_data": lambda env, name="platform": env.scene[name].data,
+    "flight_mask": lambda env: 1.0,
+}
 exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in NAMES], type_ignores=[]), str(SOURCE), "exec"), scope)
 
 

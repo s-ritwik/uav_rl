@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 import torch
 
 from isaaclab.managers import SceneEntityCfg
@@ -85,7 +87,7 @@ def update_touchdown_state(
     contact_force_norm = torch.linalg.norm(net_contact_forces, dim=-1)
     contact_force_norm = torch.amax(contact_force_norm, dim=(1, 2))
 
-    rel_vz = asset.data.root_lin_vel_w[:, 2] - reference_asset.data.root_lin_vel_w[:, 2]
+    rel_vz = asset.data.root_lin_vel_w[:, 2] - platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w[:, 2]
     just_happened = (~env._landing_touchdown_flag) & (contact_force_norm > float(threshold))
 
     env._landing_touchdown_just_happened.zero_()

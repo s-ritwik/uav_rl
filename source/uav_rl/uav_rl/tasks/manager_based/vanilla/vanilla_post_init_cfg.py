@@ -163,6 +163,8 @@ class VanillaPlatformMotionCfg:
 class VanillaPostInitCfg:
     """Single place to tune layout, reset, reward, platform, and domain randomization."""
 
+    vehicle_z0_m: float = 0.165
+
     scene: VanillaSceneLayoutCfg = VanillaSceneLayoutCfg()
     reset_spawn: VanillaResetSpawnCfg = VanillaResetSpawnCfg()
     reward_weights: VanillaRewardWeightsCfg = VanillaRewardWeightsCfg()

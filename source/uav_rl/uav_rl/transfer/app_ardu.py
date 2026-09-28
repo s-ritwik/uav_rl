@@ -252,6 +252,7 @@ from std_msgs.msg import Bool
 
 try:
     from .ardupilot_ros import PlatformRos2Publisher
+    from .marker_reference import platform_marker_state
     from .moving_platform import HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
     from .topics import (
         cmd_vel_topic,
@@ -264,6 +265,7 @@ try:
     )
 except ImportError:
     from ardupilot_ros import PlatformRos2Publisher
+    from marker_reference import platform_marker_state
     from moving_platform import HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
     from topics import (
         cmd_vel_topic,
@@ -1098,7 +1100,7 @@ class PegasusApp:
 
     def _publish_platform_state(self):
         for platform_publisher in self.platform_publishers:
-            platform_publisher.publish(self.platform.current_state)
+            platform_publisher.publish(platform_marker_state(self.world.stage, self.platform))
 
     def _on_platform_physics_step(self, dt: float):
         if self.platform_motion_started:

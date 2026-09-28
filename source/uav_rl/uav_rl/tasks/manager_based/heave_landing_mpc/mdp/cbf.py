@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 from typing import TYPE_CHECKING
 
 import torch
@@ -13,7 +15,7 @@ if TYPE_CHECKING:
 
 def compute_heave_cbf_h0_components(
     env: "ManagerBasedRLEnv",
-    d_min_m: float = 0.156,
+    d_min_m: float = 0.165,
     landing_velocity_mps: float = -0.2,
     a_rel_mps2: float = 0.7,
     eps: float = 1.0e-4,
@@ -29,8 +31,8 @@ def compute_heave_cbf_h0_components(
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
 
-    d0 = asset.data.root_pos_w[:, 2] - reference_asset.data.root_pos_w[:, 2]
-    vr0 = asset.data.root_lin_vel_w[:, 2] - reference_asset.data.root_lin_vel_w[:, 2]
+    d0 = asset.data.root_pos_w[:, 2] - platform_reference_data(env, reference_asset_cfg.name).root_pos_w[:, 2]
+    vr0 = asset.data.root_lin_vel_w[:, 2] - platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w[:, 2]
     vr_neg = 0.5 * (vr0 - torch.sqrt(torch.square(vr0) + float(eps)))
 
     a_rel = max(float(a_rel_mps2), 1.0e-6)
@@ -42,7 +44,7 @@ def compute_heave_cbf_h0_components(
 
 def heave_cbf_h0(
     env: "ManagerBasedRLEnv",
-    d_min_m: float = 0.156,
+    d_min_m: float = 0.165,
     landing_velocity_mps: float = -0.2,
     a_rel_mps2: float = 0.7,
     eps: float = 1.0e-4,
@@ -65,7 +67,7 @@ def heave_cbf_h0(
 
 def heave_cbf_features(
     env: "ManagerBasedRLEnv",
-    d_min_m: float = 0.156,
+    d_min_m: float = 0.165,
     landing_velocity_mps: float = -0.2,
     a_rel_mps2: float = 0.7,
     eps: float = 1.0e-4,

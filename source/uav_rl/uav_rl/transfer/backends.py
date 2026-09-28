@@ -7,8 +7,10 @@ import torch
 from pegasus.simulator.logic.backends import Backend, BackendConfig
 
 try:
+    from .marker_reference import platform_marker_state
     from .px4_like_controller import PX4LikeVelocityController
 except ImportError:
+    from marker_reference import platform_marker_state
     from px4_like_controller import PX4LikeVelocityController
 
 
@@ -216,7 +218,7 @@ class PolicyFlightBackend(Backend):
         self._yaw_rate_sp[:] = processed[:, 3]
 
     def _build_observation(self) -> torch.Tensor:
-        platform_state = self.cfg.platform.current_state
+        platform_state = platform_marker_state(self.cfg.platform.world.stage, self.cfg.platform)
         if platform_state is None:
             raise RuntimeError("Platform state is not initialized.")
 
@@ -232,6 +234,7 @@ class PolicyFlightBackend(Backend):
         platform_ang_vel_w = self._tensor(platform_state.angular_velocity).unsqueeze(0)
 
         rel_pos = _quat_xyzw_apply_inverse(platform_quat_xyzw, robot_pos_w - platform_pos_w)
+        rel_pos[:, 2] -= 0.165
         rel_lin_vel = _quat_xyzw_apply_inverse(platform_quat_xyzw, robot_lin_vel_w - platform_lin_vel_w)
         rel_quat_xyzw = _quat_xyzw_multiply(_quat_xyzw_conjugate(platform_quat_xyzw), robot_quat_xyzw)
         rel_quat_wxyz = _quat_xyzw_to_wxyz(rel_quat_xyzw)

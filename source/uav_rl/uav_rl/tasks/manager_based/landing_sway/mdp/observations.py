@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 import torch
 
 from isaaclab.managers import SceneEntityCfg
@@ -13,11 +15,11 @@ def root_pos_rel(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
 ) -> torch.Tensor:
-    """World-frame CG-to-CG relative position with z clearance offset applied."""
+    """World-frame root-to-PNG relative position with z clearance offset applied."""
     asset = env.scene[asset_cfg.name]
     reference_asset = env.scene[reference_asset_cfg.name]
-    rel_pos_w = asset.data.root_pos_w - reference_asset.data.root_pos_w
-    z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.053))
+    rel_pos_w = asset.data.root_pos_w - platform_reference_data(env, reference_asset_cfg.name).root_pos_w
+    z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.165))
     rel_pos_w = rel_pos_w.clone()
     rel_pos_w[:, 2] = rel_pos_w[:, 2] - z0_m
     return apply_additive_state_noise(env, rel_pos_w, env.cfg.domain_randomization.position_noise_std_m)
@@ -31,7 +33,7 @@ def root_lin_vel_rel(
     """World-frame root linear velocity of asset relative to reference."""
     asset = env.scene[asset_cfg.name]
     reference_asset = env.scene[reference_asset_cfg.name]
-    rel_lin_vel_w = asset.data.root_lin_vel_w - reference_asset.data.root_lin_vel_w
+    rel_lin_vel_w = asset.data.root_lin_vel_w - platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w
     return apply_additive_state_noise(env, rel_lin_vel_w, env.cfg.domain_randomization.linear_velocity_noise_std_mps)
 
 
@@ -54,7 +56,7 @@ def root_ang_vel_rel(
     """World-frame root angular velocity of asset relative to reference."""
     asset = env.scene[asset_cfg.name]
     reference_asset = env.scene[reference_asset_cfg.name]
-    rel_ang_vel_w = asset.data.root_ang_vel_w - reference_asset.data.root_ang_vel_w
+    rel_ang_vel_w = asset.data.root_ang_vel_w - platform_reference_data(env, reference_asset_cfg.name).root_ang_vel_w
     return apply_additive_state_noise(env, rel_ang_vel_w, env.cfg.domain_randomization.angular_velocity_noise_std_rps)
 
 

@@ -274,7 +274,7 @@ class RewardsCfg:
             "landing_speed_mps": 0.25,
             "deficit_scale_m": 0.25,
             "max_loss": 4.0,
-            "contact_root_offset_m": 0.265,
+            "contact_root_offset_m": 0.165,
         },
     )
 

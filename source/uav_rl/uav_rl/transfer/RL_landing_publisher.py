@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vehicle-z0-m",
         type=float,
-        default=0.15,
+        default=0.165,
         help="Constant landing-gear/root offset subtracted from relative z to match landing_sway observations.",
     )
     parser.add_argument("--velocity-limit-x", type=float, default=None, help="Deprecated symmetric |vx| limit.")

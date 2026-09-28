@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import MISSING
+
+from uav_rl.heave_cutoff import HeaveCutoffRuntime
+from uav_rl.transfer.thrust_cutoff import ThrustCutoffCfg
 from typing import Sequence
 
 import torch
@@ -74,6 +77,8 @@ class HeaveLandingVelocityActionCfg(ActionTermCfg):
 
     fallback_arm_length: float = 0.17
     cut_lift_after_touchdown: bool = True
+    # Enabled only by an explicit post-init cutoff configuration.
+    cutoff: ThrustCutoffCfg = ThrustCutoffCfg(enabled=False)
 
 
 class HeaveLandingVelocityAction(ActionTerm):
@@ -190,6 +195,7 @@ class HeaveLandingVelocityAction(ActionTerm):
         self._allocator: RotorAllocator | None = None
 
         self._cached_motor_omega = torch.zeros((self.num_envs, 4), device=self.device)
+        self._cutoff_runtime = HeaveCutoffRuntime(self)
         self._last_hil_controls = torch.zeros((self.num_envs, 4), device=self.device)
         self._last_torque_sp = torch.zeros((self.num_envs, 3), device=self.device)
         self._last_thrust_sp = torch.zeros((self.num_envs,), device=self.device)
@@ -230,6 +236,7 @@ class HeaveLandingVelocityAction(ActionTerm):
         return self._last_thrust_sp
 
     def process_actions(self, actions: torch.Tensor):
+        self._cutoff_runtime.check_gate()
         self._raw_actions[:] = actions
         delayed_actions = self._action_delay_buffer.compute(actions)
 
@@ -379,16 +386,24 @@ class HeaveLandingVelocityAction(ActionTerm):
         self._cached_motor_omega = self._cached_motor_omega + self._motor_lag_alpha * (
             desired_motor_omega - self._cached_motor_omega
         )
+        self._cached_motor_omega = self._cutoff_runtime.cutoff.output(self._cached_motor_omega)
+        active_ids = self._cutoff_runtime.cutoff.active.nonzero(as_tuple=False).squeeze(-1)
+        if active_ids.numel():
+            self._controller.reset(active_ids)
         self._last_hil_controls = self._controller.hil_mapper.motor_omega_to_hil_controls(self._cached_motor_omega)
 
     def apply_actions(self):
+        self._cutoff_runtime.observe_contact()
+        self._cached_motor_omega = self._cutoff_runtime.cutoff.output(self._cached_motor_omega)
         # 1) Apply command computed on previous physics tick.
         self._apply_cached_wrench()
         # 2) Compute command for the next physics tick.
         self._compute_next_command()
+        self._cutoff_runtime.cutoff.advance(float(self._env.physics_dt))
 
     def reset(self, env_ids: Sequence[int] | None = None):
         if env_ids is None:
+            self._cutoff_runtime.reset()
             clear_touchdown_state(self._env)
             self._raw_actions.zero_()
             self._processed_actions.zero_()
@@ -412,6 +427,7 @@ class HeaveLandingVelocityAction(ActionTerm):
         else:
             ids = torch.tensor(list(env_ids), device=self.device, dtype=torch.long)
 
+        self._cutoff_runtime.reset(ids)
         clear_touchdown_state(self._env, ids)
         self._raw_actions[ids] = 0.0
         self._processed_actions[ids] = 0.0

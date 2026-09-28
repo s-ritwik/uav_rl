@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+
+from uav_rl.transfer.thrust_cutoff import ThrustCutoffCfg
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -76,12 +78,12 @@ class HeaveLandingCbfCfg:
     """CBF reward parameters; contact offset is geometry, not a reward tuning knob."""
 
     braking_acceleration_mps2: float = 0.7
-    landing_speed_mps: float = 0.25
+    landing_speed_mps: float = 0.40
     deficit_scale_m: float = 0.25
     # Bound the dense signal so an early unsafe descent cannot dominate PPO updates.
     max_loss: float = 4.0
-    # Upright iris_legs.usd collision minimum (-0.165) plus deck half-height (0.10).
-    contact_root_offset_m: float = 0.265
+    # Root-to-gear clearance relative to the PNG plane (platform thickness excluded).
+    contact_root_offset_m: float = 0.165
 
 
 @configclass
@@ -104,7 +106,7 @@ class HeaveLandingTouchdownCfg:
     # Contact-force threshold that marks touchdown onset.
     force_threshold_n: float = 2.0
     # Good touchdown if descent_speed <= this value.
-    max_touchdown_speed_mps: float = 0.25
+    max_touchdown_speed_mps: float = 0.45
     # XY-center tolerance used only when require_xy_within_box=True.
     max_xy_error_m: float = 0.20
     # Stage switch: False -> train only for low touchdown speed; True -> also require near-box touchdown.
@@ -370,7 +372,19 @@ class HeaveLandingPostInitCfg:
     termination_thresholds: HeaveLandingTerminationThresholdsCfg = HeaveLandingTerminationThresholdsCfg()
     platform_motion: HeaveLandingPlatformMotionCfg = HeaveLandingPlatformMotionCfg()
     csv_heave_motion: HeaveLandingCsvHeaveMotionCfg = HeaveLandingCsvHeaveMotionCfg()
-    vehicle_z0_m: float = 0.15 
+    # Optional proximity-based rotor cutoff: a latched shutdown once the gear is close to
+    # and aligned over the deck. Opt in by setting enabled=True; every tunable lives here
+    # rather than in the shared ThrustCutoffCfg defaults, so the task owns its values.
+    # Setting cutoff = None (or deleting this block) removes the model entirely.
+    cutoff: ThrustCutoffCfg = ThrustCutoffCfg(
+        enabled=False,  # Off by default; the baseline task lands on rotor thrust alone.
+        clearance_m=0.02,  # Gear-to-PNG clearance that triggers the shutdown sequence.
+        xy_tolerance_m=0.10,  # Per-axis alignment tolerance.
+        delay_s=0.05,  # Dead time between trigger and the start of thrust decay.
+        thrust_tau_s=0.25,  # Exponential decay constant of the residual thrust.
+        off_thrust_fraction=0.001,  # Snap to zero below this fraction of trigger thrust.
+    )
+    vehicle_z0_m: float = 0.165
 
     domain_randomization: mdp.HeaveLandingDomainRandomizationCfg = mdp.HeaveLandingDomainRandomizationCfg(
         # Flag for overall DR enable/disable
@@ -521,6 +535,12 @@ class HeaveLandingPostInitCfg:
             self.touchdown.target_touchdown_yaw_deg
         )
 
+        # Removing/commenting the optional cutoff block must disable the model.
+        cutoff = getattr(self, "cutoff", None)
+        if cutoff is None:
+            cutoff = ThrustCutoffCfg(enabled=False)
+        cutoff.vehicle_z0_m = float(self.vehicle_z0_m)
+        env_cfg.actions.control.cutoff = cutoff
         env_cfg.actions.control.velocity_lower_limits = tuple(
             float(v) for v in self.action_command_limits.velocity_lower_limits
         )

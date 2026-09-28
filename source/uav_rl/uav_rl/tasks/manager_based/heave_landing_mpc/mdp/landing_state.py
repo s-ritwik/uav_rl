@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uav_rl.platform_reference import platform_reference_data
+
 import torch
 
 from isaaclab.managers import SceneEntityCfg
@@ -101,16 +103,26 @@ def update_touchdown_state(
     contact_force_norm = torch.linalg.norm(net_contact_forces, dim=-1)
     contact_force_norm = torch.amax(contact_force_norm, dim=(1, 2))
 
-    rel_vz = asset.data.root_lin_vel_w[:, 2] - reference_asset.data.root_lin_vel_w[:, 2]
-    platform_vz = reference_asset.data.root_lin_vel_w[:, 2]
-    rel_xy = asset.data.root_pos_w[:, :2] - reference_asset.data.root_pos_w[:, :2]
+    rel_vz = asset.data.root_lin_vel_w[:, 2] - platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w[:, 2]
+    platform_vz = platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w[:, 2]
+    rel_xy = asset.data.root_pos_w[:, :2] - platform_reference_data(env, reference_asset_cfg.name).root_pos_w[:, :2]
     xy_error = torch.linalg.norm(rel_xy, dim=1)
     roll, pitch, yaw = math_utils.euler_xyz_from_quat(asset.data.root_quat_w)
     just_happened = (~env._landing_touchdown_flag) & (contact_force_norm > float(threshold))
 
+    runtime = getattr(env, "_heave_cutoff_runtime", None)
+    pre_rel_vz = env._landing_prev_rel_vz
+    if runtime is not None:
+        runtime.observe_contact()
+        just_happened = runtime.touched & ~env._landing_touchdown_flag
+        pre_rel_vz = runtime.impact[:, 0]
+        platform_vz = runtime.impact[:, 1]
+        xy_error = runtime.impact[:, 2]
+        roll, pitch, yaw = runtime.impact[:, 3:].unbind(dim=-1)
+
     env._landing_touchdown_just_happened.zero_()
     env._landing_touchdown_just_happened[just_happened] = True
-    env._landing_touchdown_pre_rel_vz[just_happened] = env._landing_prev_rel_vz[just_happened]
+    env._landing_touchdown_pre_rel_vz[just_happened] = pre_rel_vz[just_happened]
     env._landing_touchdown_platform_vz[just_happened] = platform_vz[just_happened]
     env._landing_touchdown_force_norm[:] = contact_force_norm
     env._landing_touchdown_xy_error[just_happened] = xy_error[just_happened]

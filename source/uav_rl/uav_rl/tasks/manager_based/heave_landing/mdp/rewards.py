@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from uav_rl.heave_cutoff import flight_mask
+
+from uav_rl.platform_reference import platform_reference_data
+
 import math
 from typing import TYPE_CHECKING
 
@@ -70,7 +74,7 @@ def _relative_position(
 ) -> torch.Tensor:
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
-    return asset.data.root_pos_w - reference_asset.data.root_pos_w
+    return asset.data.root_pos_w - platform_reference_data(env, reference_asset_cfg.name).root_pos_w
 
 
 def position_error_l2(
@@ -122,8 +126,8 @@ def vertical_clearance_excess_l1(
 
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
-    rel_pos_w = asset.data.root_pos_w - reference_asset.data.root_pos_w
-    z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.053))
+    rel_pos_w = asset.data.root_pos_w - platform_reference_data(env, reference_asset_cfg.name).root_pos_w
+    z0_m = float(getattr(getattr(env.cfg, "post_init_cfg", None), "vehicle_z0_m", 0.165))
     z_clearance = rel_pos_w[:, 2] - z0_m
     return torch.clamp(z_clearance - float(clearance_threshold_m), min=0.0)
 
@@ -171,22 +175,23 @@ def cbf_braking_envelope_penalty(
     landing_speed_mps: float = 0.25,
     deficit_scale_m: float = 0.25,
     max_loss: float = 4.0,
-    contact_root_offset_m: float = 0.265,
+    contact_root_offset_m: float = 0.165,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_asset_cfg: SceneEntityCfg = SceneEntityCfg("platform"),
 ) -> torch.Tensor:
     """CBF-derived soft penalty, not a hard safety filter. Use a negative weight.
 
-    The offset includes both deck half-thickness and UAV root-to-foot distance.
+    The reference is the PNG plane; the offset is only UAV root-to-gear distance.
+    Platform half-thickness is already included in the PNG pose.
     Read exact simulator states, not noisy observation functions. At first contact
     use the preceding policy-step margin, so collision braking cannot hide impact
     speed. The existing touchdown reward separately grades the terminal outcome.
     RewardManager applies dt; do not multiply by dt here.
     """
     asset = env.scene[asset_cfg.name]
-    platform = env.scene[reference_asset_cfg.name]
-    clearance = asset.data.root_pos_w[:, 2] - platform.data.root_pos_w[:, 2] - contact_root_offset_m
-    relative_vz = asset.data.root_lin_vel_w[:, 2] - platform.data.root_lin_vel_w[:, 2]
+    marker = platform_reference_data(env, reference_asset_cfg.name)
+    clearance = asset.data.root_pos_w[:, 2] - marker.root_pos_w[:, 2] - contact_root_offset_m
+    relative_vz = asset.data.root_lin_vel_w[:, 2] - marker.root_lin_vel_w[:, 2]
     loss, h = cbf_braking_envelope_loss(
         clearance, relative_vz, braking_acceleration_mps2, landing_speed_mps, deficit_scale_m, max_loss
     )
@@ -207,7 +212,7 @@ def cbf_braking_envelope_penalty(
         "mean_h_m": h.mean(),
         "mean_loss": loss.mean(),
     }
-    return loss
+    return (loss) * flight_mask(env)
 
 
 def cbf_braking_metrics(env: "ManagerBasedRLEnv", env_ids=None) -> dict[str, torch.Tensor]:
@@ -231,7 +236,7 @@ def horizontal_velocity_error_tanh(
     """Positive XY relative-velocity tracking reward in [0, 1], larger when closer to target."""
     asset: RigidObject = env.scene[asset_cfg.name]
     reference_asset: RigidObject = env.scene[reference_asset_cfg.name]
-    rel_vel_xy = asset.data.root_lin_vel_w[:, :2] - reference_asset.data.root_lin_vel_w[:, :2]
+    rel_vel_xy = asset.data.root_lin_vel_w[:, :2] - platform_reference_data(env, reference_asset_cfg.name).root_lin_vel_w[:, :2]
     target = _target_tensor(env, target_rel_xy, rel_vel_xy.dtype)
     distance_xy = torch.linalg.norm(rel_vel_xy - target, dim=1)
     return 1.0 - torch.tanh(distance_xy / max(std, 1.0e-3))
@@ -260,12 +265,12 @@ def uav_linear_acceleration_l2(
 def raw_action_rate_component_l2(env: "ManagerBasedRLEnv", action_index: int) -> torch.Tensor:
     """Penalize one raw policy action-rate component by squared step-to-step change."""
     action_index = int(action_index)
-    return torch.square(env.action_manager.action[:, action_index] - env.action_manager.prev_action[:, action_index])
+    return (torch.square(env.action_manager.action[:, action_index] - env.action_manager.prev_action[:, action_index])) * flight_mask(env)
 
 
 def raw_action_component_l2(env: "ManagerBasedRLEnv", action_index: int) -> torch.Tensor:
     """Penalize one raw policy action component by squared magnitude."""
-    return torch.square(env.action_manager.action[:, int(action_index)])
+    return (torch.square(env.action_manager.action[:, int(action_index)])) * flight_mask(env)
 
 
 def near_target_action_xy_l2(
@@ -342,7 +347,14 @@ def touchdown_quality_reward(
     yaw_error = torch.atan2(torch.sin(yaw - target_yaw_rad), torch.cos(yaw - target_yaw_rad))
 
     reward = torch.zeros_like(pre_rel_vz)
+    runtime = getattr(env, "_heave_cutoff_runtime", None)
+    if runtime is not None:
+        xy_error = runtime.impact[:, 2]
+        roll, pitch, yaw = runtime.impact[:, 3:].unbind(dim=-1)
+        yaw_error = torch.atan2(torch.sin(yaw - target_yaw_rad), torch.cos(yaw - target_yaw_rad))
     speed_ok = descent_speed <= float(max_touchdown_speed_mps)
+    if runtime is not None and runtime.cutoff.cfg.enabled:
+        speed_ok = speed_ok & runtime.cutoff.active
     roll_ok = torch.abs(roll) <= math.radians(float(max_touchdown_roll_deg))
     pitch_ok = torch.abs(pitch) <= math.radians(float(max_touchdown_pitch_deg))
     yaw_ok = torch.abs(yaw_error) <= math.radians(float(max_touchdown_yaw_deg))
@@ -424,7 +436,10 @@ def touchdown_quality_metrics(
     target_yaw_rad = math.radians(float(target_touchdown_yaw_deg))
     yaw_error = torch.atan2(torch.sin(yaw - target_yaw_rad), torch.cos(yaw - target_yaw_rad))
 
+    runtime = getattr(env, "_heave_cutoff_runtime", None)
     speed_ok = descent_speed <= float(max_touchdown_speed_mps)
+    if runtime is not None and runtime.cutoff.cfg.enabled:
+        speed_ok = speed_ok & runtime.cutoff.active[env_ids_tensor]
     roll_ok = torch.abs(roll) <= math.radians(float(max_touchdown_roll_deg))
     pitch_ok = torch.abs(pitch) <= math.radians(float(max_touchdown_pitch_deg))
     yaw_ok = torch.abs(yaw_error) <= math.radians(float(max_touchdown_yaw_deg))

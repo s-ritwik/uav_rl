@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+
+from uav_rl.transfer.thrust_cutoff import ThrustCutoffCfg
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -89,7 +91,7 @@ class HeaveLandingCbfCfg:
     """Deployment-style h0 CBF settings for the heave_landing_mpc task."""
 
     # Minimum root-to-platform clearance used by h0 in IsaacSim.
-    d_min_m: float = 0.156
+    d_min_m: float = 0.165
     # Class-K CBF rate, it dooes not affect anything since im using h0 as reward
     gamma: float = 2.5
     # Landing velocity used by the stopping-distance term.
@@ -384,7 +386,9 @@ class HeaveLandingPostInitCfg:
     termination_thresholds: HeaveLandingTerminationThresholdsCfg = HeaveLandingTerminationThresholdsCfg()
     platform_motion: HeaveLandingPlatformMotionCfg = HeaveLandingPlatformMotionCfg()
     csv_heave_motion: HeaveLandingCsvHeaveMotionCfg = HeaveLandingCsvHeaveMotionCfg()
-    vehicle_z0_m: float = 0.156
+    # Comment out this line (or set cutoff = None) to disable thrust cutoff.
+    cutoff: ThrustCutoffCfg = ThrustCutoffCfg()
+    vehicle_z0_m: float = 0.165
 
     domain_randomization: mdp.HeaveLandingDomainRandomizationCfg = mdp.HeaveLandingDomainRandomizationCfg(
         # Flag for overall DR enable/disable
@@ -542,6 +546,12 @@ class HeaveLandingPostInitCfg:
             self.touchdown.target_touchdown_yaw_deg
         )
 
+        # Removing/commenting the optional cutoff block must disable the model.
+        cutoff = getattr(self, "cutoff", None)
+        if cutoff is None:
+            cutoff = ThrustCutoffCfg(enabled=False)
+        cutoff.vehicle_z0_m = float(self.vehicle_z0_m)
+        env_cfg.actions.control.cutoff = cutoff
         env_cfg.actions.control.velocity_lower_limits = tuple(
             float(v) for v in self.action_command_limits.velocity_lower_limits
         )

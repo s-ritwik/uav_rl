@@ -81,7 +81,7 @@ def touchdown_terminate(
 def heave_cbf_h0_negative(
     env: "ManagerBasedRLEnv",
     enabled: bool = True,
-    d_min_m: float = 0.156,
+    d_min_m: float = 0.165,
     landing_velocity_mps: float = -0.2,
     a_rel_mps2: float = 0.7,
     eps: float = 1.0e-4,

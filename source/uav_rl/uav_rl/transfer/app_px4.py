@@ -80,6 +80,14 @@ parser.add_argument(
 parser.add_argument("--platform_static_friction", type=float, default=40.0, help="Platform static friction.")
 parser.add_argument("--platform_dynamic_friction", type=float, default=40.0, help="Platform dynamic friction.")
 parser.add_argument("--platform_restitution", type=float, default=0.0, help="Platform restitution.")
+parser.add_argument("--disable_thrust_cutoff", action="store_true", help="Disable the proximity/spin-down model.")
+parser.add_argument("--vehicle_z0_m", type=float, default=0.165, help="Root-to-gear distance from the PNG plane [m].")
+parser.add_argument("--cutoff_clearance_m", type=float, default=0.02)
+parser.add_argument("--cutoff_xy_tolerance_m", type=float, default=0.10)
+parser.add_argument("--cutoff_delay_s", type=float, default=0.05)
+parser.add_argument("--cutoff_thrust_tau_s", type=float, default=0.25)
+parser.add_argument("--cutoff_off_thrust_fraction", type=float, default=0.001)
+
 parser.add_argument(
     "--motion_stage",
     type=str,
@@ -232,6 +240,8 @@ def _kill_stale_px4_instance(vehicle_id: int, px4_dir: str):
 simulation_app = SimulationApp({"headless": args_cli.headless})
 
 import omni.timeline
+from omni.physx import get_physx_simulation_interface
+from omni.physx.bindings._physx import ContactEventType
 from omni.isaac.core.world import World
 from isaacsim.core.utils.extensions import enable_extension
 
@@ -239,7 +249,7 @@ enable_extension("isaacsim.ros2.bridge")
 
 from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 from pymavlink import mavutil
-from pxr import PhysxSchema, Sdf, UsdPhysics, UsdShade
+from pxr import PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdPhysics, UsdShade
 from scipy.spatial.transform import Rotation
 import rclpy
 from std_msgs.msg import Bool
@@ -252,10 +262,16 @@ from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rotations import rot_ENU_to_NED
 
 try:
+    from .cutoff_thrust_curve import CutoffThrustCurve
+    from .thrust_cutoff import ThrustCutoffCfg
+    from .marker_reference import platform_marker_state as _platform_marker_state
     from .ardupilot_ros import PlatformRos2Publisher
     from .moving_platform import CsvHeaveMotionProfile, HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
     from .topics import cmd_vel_topic, disarm_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
 except ImportError:
+    from cutoff_thrust_curve import CutoffThrustCurve
+    from thrust_cutoff import ThrustCutoffCfg
+    from marker_reference import platform_marker_state as _platform_marker_state
     from ardupilot_ros import PlatformRos2Publisher
     from moving_platform import CsvHeaveMotionProfile, HarmonicAxisMotionCfg, MovingPlatform, PlatformMotionStageCfg
     from topics import cmd_vel_topic, disarm_topic, platform_pose_topic, platform_twist_topic, pose_topic, twist_inertial_topic, twist_topic
@@ -295,6 +311,12 @@ class PX4Ros2VelocityBridge(Backend):
         self._armed = False
         self._pending_arm_state = None
         self._disarm_requested = False
+        self._cutoff_request = False
+        self._cutoff_latched = False
+        if getattr(self, "_rotor_cutoff", None) is not None:
+            self._rotor_cutoff.reset()
+        if getattr(self, "_landing_diagnostics", None) is not None:
+            self._landing_diagnostics.reset()
         self._last_disarm_request_time = 0.0
         self._position_estimate_ready = False
         self._first_heartbeat_time = None
@@ -338,7 +360,10 @@ class PX4Ros2VelocityBridge(Backend):
 
     def _disarm_callback(self, msg: Bool):
         if bool(msg.data):
-            self._disarm_requested = True
+            if getattr(self, "_rotor_cutoff", None) is not None and self._rotor_cutoff.cfg.enabled:
+                self._cutoff_request = True
+            else:
+                self._disarm_requested = True
             carb.log_warn(f"[PX4Ros2VelocityBridge] drone{self._vehicle_id}: received disarm request")
 
     def _drain_mavlink(self):
@@ -513,6 +538,8 @@ class PX4Ros2VelocityBridge(Backend):
             self._prestream_count += 1
 
     def _request_offboard_and_arm(self, now: float):
+        if self._cutoff_latched:
+            return
         if not self._wait_ready(now):
             return
         if self._takeoff_state == "ready":
@@ -640,6 +667,12 @@ class PX4Ros2VelocityBridge(Backend):
         self._armed = False
         self._pending_arm_state = None
         self._disarm_requested = False
+        self._cutoff_request = False
+        self._cutoff_latched = False
+        if getattr(self, "_rotor_cutoff", None) is not None:
+            self._rotor_cutoff.reset()
+        if getattr(self, "_landing_diagnostics", None) is not None:
+            self._landing_diagnostics.reset()
         self._last_disarm_request_time = 0.0
         self._position_estimate_ready = False
         self._first_heartbeat_time = None
@@ -676,6 +709,12 @@ class PX4Ros2VelocityBridge(Backend):
         self._armed = False
         self._pending_arm_state = None
         self._disarm_requested = False
+        self._cutoff_request = False
+        self._cutoff_latched = False
+        if getattr(self, "_rotor_cutoff", None) is not None:
+            self._rotor_cutoff.reset()
+        if getattr(self, "_landing_diagnostics", None) is not None:
+            self._landing_diagnostics.reset()
         self._last_disarm_request_time = 0.0
         self._position_estimate_ready = False
         self._first_heartbeat_time = None
@@ -911,6 +950,8 @@ class PegasusApp:
         self.velocity_bridges = []
         self.state_publishers = []
         self.px4_backends = []
+        self._landing_diagnostics = {}
+        self._contact_report_sub = None
         self.platform_motion_enabled = args_cli.motion_stage != "stationary"
         self.platform_motion_started = not self.platform_motion_enabled
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -943,6 +984,14 @@ class PegasusApp:
             base_position=(args_cli.platform_x, args_cli.platform_y, args_cli.platform_z),
             add_top_decal=True,
         )
+        marker_state = _platform_marker_state(self.world.stage, self.platform)
+        carb.log_warn(
+            "[transfer.app_px4] Platform ROS pose/twist reference: ArUco PNG center "
+            f"({self.platform.prim_path}/top_decal), "
+            f"position_world={marker_state.position.tolist()}, "
+            f"quat_xyzw={marker_state.quat_xyzw.tolist()}. "
+            "Platform spawn coordinates still specify the collision-body center."
+        )
         self._apply_platform_physics_material()
         self.world.add_physics_callback("platform_motion", self._on_platform_physics_step)
         self.platform_publishers = [
@@ -952,6 +1001,9 @@ class PegasusApp:
         for vehicle_id in range(args_cli.num_drones):
             self.vehicle_factory(vehicle_id, gap_x_axis=args_cli.gap_x_axis)
 
+        self._contact_report_sub = get_physx_simulation_interface().subscribe_contact_report_events(
+            self._on_contact_report
+        )
         self.world.reset()
         self.platform.reset_profile()
         if args_cli.motion_stage == "heave":
@@ -990,6 +1042,19 @@ class PegasusApp:
             num_rotors=config_multirotor.thrust_curve._num_rotors,
         )
         self.velocity_bridges.append(velocity_bridge)
+        config_multirotor.thrust_curve = CutoffThrustCurve(
+            config_multirotor.thrust_curve, self.platform, velocity_bridge,
+            ThrustCutoffCfg(
+                enabled=not args_cli.disable_thrust_cutoff,
+                clearance_m=args_cli.cutoff_clearance_m,
+                xy_tolerance_m=args_cli.cutoff_xy_tolerance_m,
+                vehicle_z0_m=args_cli.vehicle_z0_m,
+                delay_s=args_cli.cutoff_delay_s,
+                thrust_tau_s=args_cli.cutoff_thrust_tau_s,
+                off_thrust_fraction=args_cli.cutoff_off_thrust_fraction,
+            ),
+        )
+
 
         state_publisher = VehicleStateRos2Publisher(vehicle_id=vehicle_id, namespace=args_cli.namespace)
         self.state_publishers.append(state_publisher)
@@ -1000,7 +1065,7 @@ class PegasusApp:
             velocity_bridge,
         ]
 
-        Multirotor(
+        vehicle = Multirotor(
             f"/World/drone{vehicle_id}",
             IRIS_USD_PATH,
             vehicle_id,
@@ -1008,6 +1073,12 @@ class PegasusApp:
             Rotation.from_euler("XYZ", [0.0, 0.0, 0.0], degrees=True).as_quat(),
             config=config_multirotor,
         )
+
+        self._landing_diagnostics[vehicle.prim_path] = config_multirotor.thrust_curve.diagnostics
+        for prim in Usd.PrimRange(self.world.stage.GetPrimAtPath(vehicle.prim_path)):
+            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                report = PhysxSchema.PhysxContactReportAPI.Apply(prim)
+                report.CreateThresholdAttr().Set(0.0)
 
         carb.log_warn(
             "[transfer.app_px4] ROS topics for drone%d: %s, %s, %s, %s, %s"
@@ -1020,6 +1091,25 @@ class PegasusApp:
                 platform_twist_topic(args_cli.namespace, vehicle_id),
             )
         )
+
+    def _on_contact_report(self, headers, contact_data):
+        for header in headers:
+            if header.type not in (ContactEventType.CONTACT_FOUND, ContactEventType.CONTACT_PERSIST):
+                continue
+            start = header.contact_data_offset
+            # Contact pairs can be reported at positive separation, before impact.
+            if not any(np.linalg.norm(contact_data[i].impulse) > 1.0e-8
+                       for i in range(start, start + header.num_contact_data)):
+                continue
+            actors = [str(PhysicsSchemaTools.intToSdfPath(actor)) for actor in (header.actor0, header.actor1)]
+            for root, diagnostics in self._landing_diagnostics.items():
+                belongs = [actor == root or actor.startswith(root + "/") for actor in actors]
+                if sum(belongs) != 1:  # Ignore unrelated contacts and internal rotor/body contacts.
+                    continue
+                surface = actors[1] if belongs[0] else actors[0]
+                platform_root = self.platform.prim_path
+                on_platform = surface == platform_root or surface.startswith(platform_root + "/")
+                diagnostics.contact(surface, on_platform)
 
     def _apply_platform_physics_material(self):
         material_path = Sdf.Path("/World/Physics_Materials/platform_physics_material")
@@ -1064,6 +1154,7 @@ class PegasusApp:
 
         self._shutdown_complete = True
         self.stop_sim = True
+        self._contact_report_sub = None
 
         for velocity_bridge in getattr(self, "velocity_bridges", []):
             try:
@@ -1106,8 +1197,9 @@ class PegasusApp:
             pass
 
     def _publish_platform_state(self):
+        marker_state = _platform_marker_state(self.world.stage, self.platform)
         for platform_publisher in self.platform_publishers:
-            platform_publisher.publish(self.platform.current_state)
+            platform_publisher.publish(marker_state)
 
     def _on_platform_physics_step(self, dt: float):
         if self.platform_motion_started:

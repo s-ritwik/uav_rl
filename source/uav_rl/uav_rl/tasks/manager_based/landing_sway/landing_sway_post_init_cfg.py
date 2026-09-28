@@ -320,7 +320,7 @@ class LandingSwayPostInitCfg:
     termination_penalty: LandingSwayTerminationPenaltyCfg = LandingSwayTerminationPenaltyCfg()
     termination_thresholds: LandingSwayTerminationThresholdsCfg = LandingSwayTerminationThresholdsCfg()
     platform_motion: LandingSwayPlatformMotionCfg = LandingSwayPlatformMotionCfg()
-    vehicle_z0_m: float = 0.15 
+    vehicle_z0_m: float = 0.165
 
     domain_randomization: mdp.LandingSwayDomainRandomizationCfg = mdp.LandingSwayDomainRandomizationCfg(
         # Flag for overall DR enable/disable
